@@ -1,0 +1,78 @@
+# The weather system
+
+> The reference document of WorldWeatherPlugin, with `.claude/instructions.md`. The design record is the parent
+> project's `Documentation/WEATHER_SYSTEM_PLAN.md` (the question, the survey, the architecture, D58-D66, P0-P6). Each
+> phase adds its results paragraph here.
+
+## 1. What it is
+
+Weather as world state with the world clock's shape: the authority owns a timeline of fronts, publishes one sync point,
+and every machine derives the present from the synchronised clock. A front is ten authored numbers (`FWorldWeatherFront`:
+cloud cover and density, a precipitation rate, fog, wind speed and azimuth, gustiness, thunder rate, a temperature
+offset, humidity); the world blends from one to the next over a preset's blend time and holds it for a drawn hold time.
+What a front means at a place (`FWorldWeatherConditions`: rain, snow or sleet, the wind in the local frame, the
+temperature, the ground's wetness or snow cover, the exposure, the tags) is resolved per position through two provider
+interfaces a game sets, so the plugin stays engine-only.
+
+## 2. The pieces
+
+| Piece | Role |
+|---|---|
+| `UWorldWeatherSubsystem` | The timeline (the schedule, the sync point, the accumulators), `GetConditionsAt`, `GetExposureAt`, the delegates, the setters, the save state |
+| `AWorldWeatherState` | The replication carrier: an always-relevant info actor with the sync point and the lock |
+| `UWorldWeatherMath` | Pure: the blend, the schedule, the precipitation type, the local frame and the wind, the accumulators, the lightning schedule, the resolution |
+| `UWorldWeatherPresetTable` | The fronts a world can have, with hold and blend times and climate affinities; seven defaults built in memory when no asset is named |
+| `UWorldWeatherSettings` | The table, the seed, the temperature map, the thresholds, the rates, the shelter trace, the lightning radius |
+| `IWorldWeatherClimateProvider`, `IWorldWeatherShelterProvider` | What is world-specific: the climate and frame at a place, the seed; shelter a trace cannot see |
+| `WorldWeatherTags.h` | `Weather.*`: the presets, the precipitation type and intensity, storm, fog, the wind band, sheltered |
+| `ww.*` | The console: `ww.Weather`, `ww.Set`, `ww.Lock`, `ww.Wind`, `ww.Strike`, `ww.Next` |
+
+## 3. The timeline
+
+The authority's tick: no front yet, draw the first (`StartPreset` when the settings name one, else the schedule's
+draw with no blend); the blend and the hold run out, draw the next (`PickNext`). A draw seeds a stream with the
+schedule seed (the settings' plus the climate provider's world seed), the clock day and the draw's index, weights the
+presets by their affinities at the climate of the reference point (the first player's position, else the origin), and
+never draws the present preset again when another has weight; the hold comes from the preset's range. `SetWeather`,
+`SetWind`, `SkipToNext`, `SetLocked` and `ImportState` are the authority's other ways in; each publishes.
+
+The sync point: the front left (the present resolved at the moment of the draw, so a blend interrupted blends on from
+where it was), the front arrived at, their tags, the start in clock seconds (day 1 at 00:00 = 0), the blend and hold in
+game seconds, the wetness and snow cover at the start, a serial. Every machine resolves the present from it and
+`GetClockSeconds()`: alpha = clamp((now - start) / blend), the front = the member lerp (the azimuth the short way), the
+preset = the one left until alpha reaches 0.5, then the one arrived at (the change event's edge), the accumulators
+integrated forward in game-minute steps (at most 256, so a locked front stays cheap). Nothing is republished for drift:
+the integration is a pure function of the sync point and the time, the same on every machine.
+
+The accumulators: under precipitation the wetness rises toward 1 at the rate over `WetnessRiseSeconds` and the snow
+cover over `SnowRiseSeconds`; without it the wetness decays over `DryingSeconds` (humid air up to half as fast) and the
+snow over `MeltSeconds`. Both are global: at a place the snow cover counts where it is cold (the cold factor, 1 at or
+under `SnowBelowC`, 0 at `SnowBelowC + SleetBandC`) and the wetness where it is not.
+
+Lightning: a clock minute strikes when a hash of the seed and the minute falls under the front's `ThunderRate` (at most
+one strike a minute), at a hashed second within it; every machine agrees on the time and picks its own place within
+`LightningRadius` of its first local player's view. `ww.Strike` fires one by hand.
+
+## 4. The query
+
+`GetConditionsAt(Pos, Requester)`: the climate at the place (the provider's, else `DefaultTemperature` /
+`DefaultMoisture` on a Z-up plane); degrees = the settings' linear map (or `TemperatureCurve`) of the climate's
+temperature, less `NightCoolingC` times (1 - the clock's local daylight), plus the front's offset; the precipitation rate
+= the front's times lerp(`DryPrecipitationScale`, 1, moisture), none under water; the type by the degrees; the wind =
+speed times the gust factor along the azimuth in the local frame; the exposure = the shelter provider's answer, else a
+trace cone (`ShelterTraces` rays along the up, the outer ones `ShelterConeDegrees` off it, over `ShelterDistance`, the
+requester's actor ignored, cached `ShelterInterval` per requester); the tags.
+
+The local frame is cyclic with the world's axes (east x north = up, as X x Y = Z): north is +Z projected onto the
+tangent plane, toward a planet's pole, +Y on a plane; east is north x up, the side of increasing longitude on a planet
+(where the clock's sun rises), +X on a plane (the clock's default sunrise bearing). A front's wind azimuth is degrees
+from that north toward that east.
+
+## 5. Results
+
+### P0 (2026-11-06): the plugin and the core
+
+The repository, the submodule, the module above, the seven default presets, the tags, the pure math, the subsystem, the
+state actor, the two provider interfaces, the six console commands, the eight tests. No effect yet: `ww.Weather` shows
+the front changing on the server and on a client. The default table lives in code (`FillDefaults`); P1's content script
+bakes it into an asset the settings name.

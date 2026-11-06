@@ -1,0 +1,470 @@
+// Copyright Daniel Raquel. All Rights Reserved.
+
+#include "CoreMinimal.h"
+#include "Misc/AutomationTest.h"
+
+#include "WorldWeatherMath.h"
+#include "WorldWeatherPreset.h"
+#include "WorldWeatherSettings.h"
+#include "WorldWeatherSubsystem.h"
+#include "WorldWeatherTags.h"
+#include "WorldWeatherTypes.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
+#include "WorldClockSubsystem.h"
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+#define WORLDWEATHER_TEST_FLAGS (EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+namespace
+{
+	FWorldWeatherFront MakeFront(float Cover, float Precip, float Fog, float Wind, float Azimuth, float Gust, float Thunder, float Temp, float Humidity)
+	{
+		FWorldWeatherFront F;
+		F.CloudCover = Cover;
+		F.CloudDensity = Cover;
+		F.Precipitation = Precip;
+		F.FogDensity = Fog;
+		F.WindSpeed = Wind;
+		F.WindAzimuth = Azimuth;
+		F.Gustiness = Gust;
+		F.ThunderRate = Thunder;
+		F.TemperatureOffset = Temp;
+		F.Humidity = Humidity;
+		return F;
+	}
+
+	FWorldWeatherSyncPoint MakeSync(const FWorldWeatherFront& From, const FWorldWeatherFront& To, double Start, float Blend, float Hold)
+	{
+		FWorldWeatherSyncPoint S;
+		S.FromFront = From;
+		S.ToFront = To;
+		S.FromTag = WorldWeatherTags::Weather_Preset_Clear;
+		S.ToTag = WorldWeatherTags::Weather_Preset_Storm;
+		S.StartSeconds = Start;
+		S.BlendSeconds = Blend;
+		S.HoldSeconds = Hold;
+		S.Serial = 1;
+		return S;
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The blend: member by member, the azimuth the short way round.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldWeatherBlendTest, "WorldWeather.Math.Blend", WORLDWEATHER_TEST_FLAGS)
+bool FWorldWeatherBlendTest::RunTest(const FString& Parameters)
+{
+	const FWorldWeatherFront Clear = MakeFront(0.1f, 0.0f, 0.0f, 100.0f, 350.0f, 0.2f, 0.0f, 2.0f, 0.2f);
+	const FWorldWeatherFront Storm = MakeFront(1.0f, 1.0f, 0.3f, 900.0f, 20.0f, 0.8f, 0.5f, -4.0f, 1.0f);
+	const FWorldWeatherFront Mid = UWorldWeatherMath::Blend(Clear, Storm, 0.5f);
+	TestEqual(TEXT("Cloud cover half way"), Mid.CloudCover, 0.55f, 1.0e-5f);
+	TestEqual(TEXT("Precipitation half way"), Mid.Precipitation, 0.5f, 1.0e-5f);
+	TestEqual(TEXT("Wind speed half way"), Mid.WindSpeed, 500.0f, 1.0e-3f);
+	TestEqual(TEXT("Thunder half way"), Mid.ThunderRate, 0.25f, 1.0e-5f);
+	TestEqual(TEXT("Temperature offset half way"), Mid.TemperatureOffset, -1.0f, 1.0e-5f);
+	TestEqual(TEXT("Azimuth 350 -> 20 goes through north: 5"), Mid.WindAzimuth, 5.0f, 1.0e-3f);
+	TestEqual(TEXT("Azimuth 20 -> 350 back through north: 5"), UWorldWeatherMath::LerpAzimuth(20.0f, 350.0f, 0.5f), 5.0f, 1.0e-3f);
+	TestEqual(TEXT("Azimuth 90 -> 270 half way is 180"), UWorldWeatherMath::LerpAzimuth(90.0f, 270.0f, 0.5f), 180.0f, 1.0e-3f);
+	TestTrue(TEXT("Alpha 0 is From"), UWorldWeatherMath::Blend(Clear, Storm, 0.0f).WindAzimuth == 350.0f);
+	TestTrue(TEXT("Alpha 1 is To"), UWorldWeatherMath::Blend(Clear, Storm, 1.0f).WindAzimuth == 20.0f);
+	TestTrue(TEXT("Alpha clamps"), UWorldWeatherMath::Blend(Clear, Storm, 3.0f).CloudCover == 1.0f);
+	TestEqual(TEXT("A zero blend is done at once"), UWorldWeatherMath::BlendAlpha(100.0, 0.0f, 100.0), 1.0f);
+	TestEqual(TEXT("Before the start the blend is 0"), UWorldWeatherMath::BlendAlpha(100.0, 50.0f, 90.0), 0.0f);
+	TestEqual(TEXT("Half way"), UWorldWeatherMath::BlendAlpha(100.0, 50.0f, 125.0), 0.5f, 1.0e-6f);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The schedule: the same seed, day and climate give the same sequence; affinities zero a preset out; no immediate repeat.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldWeatherScheduleTest, "WorldWeather.Math.Schedule", WORLDWEATHER_TEST_FLAGS)
+bool FWorldWeatherScheduleTest::RunTest(const FString& Parameters)
+{
+	TArray<FWorldWeatherPreset> Presets;
+	UWorldWeatherPresetTable::FillDefaults(Presets);
+	TestEqual(TEXT("Seven defaults"), Presets.Num(), 7);
+	{
+		TSet<FGameplayTag> Tags;
+		for (const FWorldWeatherPreset& P : Presets)
+		{
+			TestTrue(TEXT("A valid preset tag"), P.Tag.IsValid() && P.Tag.MatchesTag(WorldWeatherTags::Weather_Preset));
+			Tags.Add(P.Tag);
+		}
+		TestEqual(TEXT("Every tag once"), Tags.Num(), 7);
+	}
+	const int32 SnowIndex = Presets.IndexOfByPredicate([](const FWorldWeatherPreset& P) { return P.Tag == WorldWeatherTags::Weather_Preset_Snow; });
+	const int32 RainIndex = Presets.IndexOfByPredicate([](const FWorldWeatherPreset& P) { return P.Tag == WorldWeatherTags::Weather_Preset_Rain; });
+
+	// Determinism: two runs of the same inputs agree, a different seed differs somewhere.
+	TArray<int32> A, B, C;
+	TArray<float> HoldsA, HoldsB;
+	int32 PrevA = -1, PrevB = -1, PrevC = -1;
+	for (int32 i = 0; i < 40; ++i)
+	{
+		float Hold = 0.0f;
+		PrevA = UWorldWeatherMath::PickNext(1234, 3, i, 0.5f, 0.5f, Presets, PrevA, Hold);
+		A.Add(PrevA);
+		HoldsA.Add(Hold);
+		PrevB = UWorldWeatherMath::PickNext(1234, 3, i, 0.5f, 0.5f, Presets, PrevB, Hold);
+		B.Add(PrevB);
+		HoldsB.Add(Hold);
+		PrevC = UWorldWeatherMath::PickNext(99, 3, i, 0.5f, 0.5f, Presets, PrevC, Hold);
+		C.Add(PrevC);
+	}
+	TestTrue(TEXT("The same seed, day and climate give the same fronts"), A == B && HoldsA == HoldsB);
+	TestTrue(TEXT("Another seed gives other fronts"), A != C);
+	for (int32 i = 1; i < A.Num(); ++i)
+	{
+		TestTrue(TEXT("No front twice in a row"), A[i] != A[i - 1]);
+		TestTrue(TEXT("A valid index"), Presets.IsValidIndex(A[i]));
+		const FWorldWeatherPreset& P = Presets[A[i]];
+		TestTrue(TEXT("The hold within the preset's range"), HoldsA[i] >= P.HoldMinutesMin * 60.0f - 1.0e-3f && HoldsA[i] <= P.HoldMinutesMax * 60.0f + 1.0e-3f);
+	}
+
+	// Affinities: a hot desert never draws Snow (HotWeight 0); a cold wet place draws Snow more than Rain.
+	int32 SnowInDesert = 0, SnowInTundra = 0, RainInTundra = 0;
+	int32 Prev = -1;
+	for (int32 i = 0; i < 400; ++i)
+	{
+		float Hold = 0.0f;
+		Prev = UWorldWeatherMath::PickNext(7, 1, i, 1.0f, 0.0f, Presets, Prev, Hold);
+		SnowInDesert += Prev == SnowIndex ? 1 : 0;
+	}
+	Prev = -1;
+	for (int32 i = 0; i < 400; ++i)
+	{
+		float Hold = 0.0f;
+		Prev = UWorldWeatherMath::PickNext(7, 1, i, 0.0f, 1.0f, Presets, Prev, Hold);
+		SnowInTundra += Prev == SnowIndex ? 1 : 0;
+		RainInTundra += Prev == RainIndex ? 1 : 0;
+	}
+	AddInfo(FString::Printf(TEXT("400 draws: snow in the desert %d, in the tundra %d (rain there %d)"), SnowInDesert, SnowInTundra, RainInTundra));
+	TestEqual(TEXT("No snow in a hot desert"), SnowInDesert, 0);
+	TestTrue(TEXT("Snow over rain in the tundra"), SnowInTundra > RainInTundra && SnowInTundra > 40);
+
+	// A table with weight nowhere, and an empty one.
+	TArray<FWorldWeatherPreset> Weightless;
+	Weightless.AddDefaulted();
+	Weightless[0].ColdWeight = Weightless[0].TemperateWeight = Weightless[0].HotWeight = 0.0f;
+	float Hold = 0.0f;
+	TestEqual(TEXT("No weight anywhere: -1"), UWorldWeatherMath::PickNext(1, 1, 0, 0.5f, 0.5f, Weightless, -1, Hold), -1);
+	TestEqual(TEXT("An empty table: -1"), UWorldWeatherMath::PickNext(1, 1, 0, 0.5f, 0.5f, TArray<FWorldWeatherPreset>(), -1, Hold), -1);
+	// One preset only: it repeats (nothing else has weight).
+	TArray<FWorldWeatherPreset> One;
+	One.AddDefaulted();
+	TestEqual(TEXT("One preset repeats"), UWorldWeatherMath::PickNext(1, 1, 0, 0.5f, 0.5f, One, 0, Hold), 0);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Precipitation type by the temperature, the sleet band, the moisture factor, the cold factor.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldWeatherPrecipitationTypeTest, "WorldWeather.Math.PrecipitationType", WORLDWEATHER_TEST_FLAGS)
+bool FWorldWeatherPrecipitationTypeTest::RunTest(const FString& Parameters)
+{
+	TestTrue(TEXT("No rate: nothing"), UWorldWeatherMath::PrecipitationType(10.0f, 0.0f, 0.0f, 2.0f) == EWorldWeatherPrecipitation::None);
+	TestTrue(TEXT("Warm: rain"), UWorldWeatherMath::PrecipitationType(10.0f, 0.5f, 0.0f, 2.0f) == EWorldWeatherPrecipitation::Rain);
+	TestTrue(TEXT("Freezing: snow"), UWorldWeatherMath::PrecipitationType(0.0f, 0.5f, 0.0f, 2.0f) == EWorldWeatherPrecipitation::Snow);
+	TestTrue(TEXT("Below freezing: snow"), UWorldWeatherMath::PrecipitationType(-12.0f, 0.5f, 0.0f, 2.0f) == EWorldWeatherPrecipitation::Snow);
+	TestTrue(TEXT("Just above freezing: sleet"), UWorldWeatherMath::PrecipitationType(1.0f, 0.5f, 0.0f, 2.0f) == EWorldWeatherPrecipitation::Sleet);
+	TestTrue(TEXT("At the band's top: rain"), UWorldWeatherMath::PrecipitationType(2.0f, 0.5f, 0.0f, 2.0f) == EWorldWeatherPrecipitation::Rain);
+	TestTrue(TEXT("No sleet band: rain just above freezing"), UWorldWeatherMath::PrecipitationType(0.5f, 0.5f, 0.0f, 0.0f) == EWorldWeatherPrecipitation::Rain);
+
+	TestEqual(TEXT("Cold factor 1 at freezing"), UWorldWeatherMath::ColdFactor(0.0f, 0.0f, 2.0f), 1.0f);
+	TestEqual(TEXT("Cold factor half in the band"), UWorldWeatherMath::ColdFactor(1.0f, 0.0f, 2.0f), 0.5f, 1.0e-6f);
+	TestEqual(TEXT("Cold factor 0 above the band"), UWorldWeatherMath::ColdFactor(5.0f, 0.0f, 2.0f), 0.0f);
+
+	TestEqual(TEXT("Dry place: a quarter of the front's rate"), UWorldWeatherMath::PrecipitationRateAt(0.8f, 0.0f, 0.25f), 0.2f, 1.0e-6f);
+	TestEqual(TEXT("Wet place: the front's rate"), UWorldWeatherMath::PrecipitationRateAt(0.8f, 1.0f, 0.25f), 0.8f, 1.0e-6f);
+
+	// Degrees: the linear map, the night's cooling, the front's offset.
+	TestEqual(TEXT("Noon at the hot end"), UWorldWeatherMath::TemperatureC(1.0f, -20.0f, 35.0f, 1.0f, 6.0f, 0.0f), 35.0f, 1.0e-4f);
+	TestEqual(TEXT("Midnight at the cold end"), UWorldWeatherMath::TemperatureC(0.0f, -20.0f, 35.0f, 0.0f, 6.0f, 0.0f), -26.0f, 1.0e-4f);
+	TestEqual(TEXT("A cold front at noon in the middle"), UWorldWeatherMath::TemperatureC(0.5f, -20.0f, 35.0f, 1.0f, 6.0f, -4.0f), 3.5f, 1.0e-4f);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The wind: tangent to the up on a planet, the plane's XY, the azimuth convention, the gust within its band.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldWeatherWindVectorTest, "WorldWeather.Math.WindVector", WORLDWEATHER_TEST_FLAGS)
+bool FWorldWeatherWindVectorTest::RunTest(const FString& Parameters)
+{
+	// A plane: azimuth 0 is +Y (north), 90 is +X (east, where the clock's sun rises by default), in the XY plane.
+	const FVector North = UWorldWeatherMath::WindVector(300.0f, 0.0f, FVector::UpVector, 0.0f, 0.0);
+	TestTrue(TEXT("Plane: azimuth 0 blows along +Y at the speed"), North.Equals(FVector(0.0, 300.0, 0.0), 1.0e-3));
+	const FVector East = UWorldWeatherMath::WindVector(300.0f, 90.0f, FVector::UpVector, 0.0f, 0.0);
+	TestTrue(TEXT("Plane: azimuth 90 blows along +X"), East.Equals(FVector(300.0, 0.0, 0.0), 1.0e-3));
+	// The frame is cyclic with the world's axes on the plane and on the planet: east x north = up.
+	{
+		FVector N, E;
+		UWorldWeatherMath::LocalFrame(FVector::UpVector, N, E);
+		TestTrue(TEXT("Plane: east x north = up"), FVector::CrossProduct(E, N).Equals(FVector::UpVector, 1.0e-6));
+		UWorldWeatherMath::LocalFrame(FVector(0.6, 0.0, 0.8), N, E);
+		TestTrue(TEXT("Planet: east x north = up"), FVector::CrossProduct(E, N).Equals(FVector(0.6, 0.0, 0.8), 1.0e-6));
+	}
+	TestTrue(TEXT("Plane: no vertical wind"), FMath::IsNearlyZero(UWorldWeatherMath::WindVector(300.0f, 215.0f, FVector::UpVector, 0.0f, 0.0).Z, 1.0e-6));
+
+	// A planet: tangent to the local up everywhere, north toward the pole.
+	double WorstTangent = 0.0;
+	for (const FVector& Up : { FVector(1, 0, 0), FVector(0, 1, 0), FVector(0.6, 0.0, 0.8), FVector(-0.3, 0.5, -0.4).GetSafeNormal(), FVector(0.0, 0.0, -1.0) })
+	{
+		for (const float Azimuth : { 0.0f, 45.0f, 137.0f, 270.0f })
+		{
+			const FVector W = UWorldWeatherMath::WindVector(500.0f, Azimuth, Up, 0.0f, 0.0);
+			WorstTangent = FMath::Max(WorstTangent, FMath::Abs(FVector::DotProduct(W.GetSafeNormal(), Up.GetSafeNormal())));
+			TestTrue(TEXT("Planet: the speed kept"), FMath::IsNearlyEqual(W.Size(), 500.0, 1.0e-3));
+		}
+	}
+	AddInfo(FString::Printf(TEXT("Worst wind component along the up: %.2e"), WorstTangent));
+	TestTrue(TEXT("Planet: the wind is tangent to the up"), WorstTangent < 1.0e-5);
+	const FVector OnEquator = UWorldWeatherMath::WindVector(100.0f, 0.0f, FVector(1, 0, 0), 0.0f, 0.0);
+	TestTrue(TEXT("Planet: north on the equator points to the pole"), OnEquator.Equals(FVector(0.0, 0.0, 100.0), 1.0e-3));
+	const FVector EastOnEquator = UWorldWeatherMath::WindVector(100.0f, 90.0f, FVector(1, 0, 0), 0.0f, 0.0);
+	TestTrue(TEXT("Planet: east on the equator at longitude 0 is +Y"), EastOnEquator.Equals(FVector(0.0, 100.0, 0.0), 1.0e-3));
+
+	// The gust: 1 without gustiness; within 1 +- G and never negative with it; the mean near 1.
+	TestEqual(TEXT("No gustiness: 1"), UWorldWeatherMath::GustFactor(123.4, 0.0f), 1.0f);
+	float Lo = 10.0f, Hi = 0.0f;
+	double Sum = 0.0;
+	const int32 N = 20000;
+	for (int32 i = 0; i < N; ++i)
+	{
+		const float G = UWorldWeatherMath::GustFactor(i * 0.05, 0.8f);
+		Lo = FMath::Min(Lo, G);
+		Hi = FMath::Max(Hi, G);
+		Sum += G;
+	}
+	AddInfo(FString::Printf(TEXT("Gust factor at 0.8: %.3f .. %.3f, mean %.4f"), Lo, Hi, Sum / N));
+	TestTrue(TEXT("Gust within the band"), Lo >= 1.0f - 0.8f - 1.0e-4f && Hi <= 1.0f + 0.8f + 1.0e-4f && Lo >= 0.0f);
+	TestTrue(TEXT("Gust reaches most of the band"), Hi > 1.5f && Lo < 0.5f);
+	TestTrue(TEXT("Gust mean near 1"), FMath::Abs(Sum / N - 1.0) < 0.02);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The accumulators: wetness rises under rain and decays after; snow follows; integrating from a sync point equals ticking
+// (the same inputs, the same steps, on any machine); the local reading is snow where it is cold.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldWeatherAccumulatorsTest, "WorldWeather.Math.Accumulators", WORLDWEATHER_TEST_FLAGS)
+bool FWorldWeatherAccumulatorsTest::RunTest(const FString& Parameters)
+{
+	FWorldWeatherAccumulatorRates Rates;
+	Rates.WetnessRiseSeconds = 600.0f;
+	Rates.DryingSeconds = 3600.0f;
+	Rates.SnowRiseSeconds = 1800.0f;
+	Rates.MeltSeconds = 14400.0f;
+	const FWorldWeatherFront Dry = MakeFront(0.1f, 0.0f, 0.0f, 100.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.2f);
+	const FWorldWeatherFront Rain = MakeFront(0.9f, 1.0f, 0.2f, 300.0f, 0.0f, 0.0f, 0.0f, -3.0f, 0.9f);
+
+	// Rain from dry ground: wetness climbs toward 1, most of the way in one rise time; snow slower.
+	const FWorldWeatherSyncPoint Raining = MakeSync(Rain, Rain, 1000.0, 0.0f, 7200.0f);
+	float W = 0.0f, S = 0.0f;
+	UWorldWeatherMath::IntegrateAccumulators(Raining, 1000.0, Rates, W, S);
+	TestEqual(TEXT("At the start: the sync point's values"), W, 0.0f);
+	UWorldWeatherMath::IntegrateAccumulators(Raining, 1600.0, Rates, W, S);
+	AddInfo(FString::Printf(TEXT("After 600 s of rain: wetness %.3f, snow %.3f"), W, S));
+	TestTrue(TEXT("Wet after one rise time"), W > 0.6f && W < 0.7f);
+	TestTrue(TEXT("Snow follows, slower"), S > 0.25f && S < W);
+	float W2 = 0.0f, S2 = 0.0f;
+	UWorldWeatherMath::IntegrateAccumulators(Raining, 1000.0 + 3600.0 * 4.0, Rates, W2, S2);
+	TestTrue(TEXT("Hours of rain: soaked"), W2 > 0.99f && S2 > 0.99f);
+
+	// Then dry air from soaked ground: wetness decays; snow lingers.
+	FWorldWeatherSyncPoint Drying = MakeSync(Dry, Dry, 5000.0, 0.0f, 7200.0f);
+	Drying.Wetness = 1.0f;
+	Drying.SnowCover = 1.0f;
+	UWorldWeatherMath::IntegrateAccumulators(Drying, 5000.0 + 3600.0, Rates, W, S);
+	AddInfo(FString::Printf(TEXT("After 3600 s of dry air: wetness %.3f, snow %.3f"), W, S));
+	TestTrue(TEXT("Dries toward e^-1 in one drying time (humidity 0.2 slows it a little)"), W > 0.33f && W < 0.45f);
+	TestTrue(TEXT("Snow goes slower"), S > 0.75f && S < 0.8f);
+
+	// A blend from dry to rain: between the two.
+	const FWorldWeatherSyncPoint Blending = MakeSync(Dry, Rain, 0.0, 1200.0f, 3600.0f);
+	UWorldWeatherMath::IntegrateAccumulators(Blending, 1200.0, Rates, W, S);
+	float WFull = 0.0f, SFull = 0.0f;
+	UWorldWeatherMath::IntegrateAccumulators(Raining, 1000.0 + 1200.0, Rates, WFull, SFull);
+	TestTrue(TEXT("A blend into rain wets less than rain from the start"), W > 0.2f && W < WFull);
+
+	// Integrating from the sync point in one go equals ticking from it in pieces (the step is a game minute either way).
+	float WTick = 0.0f, STick = 0.0f;
+	{
+		FWorldWeatherSyncPoint Walking = Blending;
+		for (double T = 0.0; T < 1200.0; T += 60.0)
+		{
+			UWorldWeatherMath::IntegrateAccumulators(Walking, T + 60.0, Rates, WTick, STick);
+			Walking.Wetness = WTick;
+			Walking.SnowCover = STick;
+			Walking.StartSeconds = T + 60.0;
+			// The blend goes on from the original start: keep the fronts' alpha by moving From to the present.
+			Walking.FromFront = UWorldWeatherMath::ResolveFront(Blending, T + 60.0);
+			Walking.BlendSeconds = static_cast<float>(FMath::Max(1200.0 - (T + 60.0), 0.0));
+		}
+	}
+	AddInfo(FString::Printf(TEXT("Blend 1200 s: in one go wetness %.5f, ticked %.5f"), W, WTick));
+	TestTrue(TEXT("One go equals ticking"), FMath::IsNearlyEqual(W, WTick, 2.0e-3f) && FMath::IsNearlyEqual(S, STick, 2.0e-3f));
+
+	// Long holds stay cheap and smooth: a day of rain in at most 256 steps still soaks the ground.
+	UWorldWeatherMath::IntegrateAccumulators(Raining, 1000.0 + 86400.0, Rates, W, S);
+	TestTrue(TEXT("A day of rain: soaked"), W > 0.99f && S > 0.99f);
+
+	// The local reading: snow where it is cold, wet where it is warm, through the resolution.
+	FWorldWeatherRules Rules;
+	FWorldWeatherClimateSample Climate;
+	const FWorldWeatherConditions Cold = UWorldWeatherMath::Resolve(Rain, WorldWeatherTags::Weather_Preset_Rain, Climate, -5.0f, 0.8f, 0.6f, 1.0f, 0.0, Rules);
+	TestTrue(TEXT("Cold: snow falls"), Cold.PrecipitationType == EWorldWeatherPrecipitation::Snow && Cold.Tags.HasTagExact(WorldWeatherTags::Weather_Precipitation_Snow));
+	TestTrue(TEXT("Cold: the cover is snow, the ground not wet"), FMath::IsNearlyEqual(Cold.SnowCover, 0.6f) && Cold.Wetness == 0.0f);
+	const FWorldWeatherConditions Warm = UWorldWeatherMath::Resolve(Rain, WorldWeatherTags::Weather_Preset_Rain, Climate, 15.0f, 0.8f, 0.6f, 1.0f, 0.0, Rules);
+	TestTrue(TEXT("Warm: rain falls"), Warm.PrecipitationType == EWorldWeatherPrecipitation::Rain && Warm.Tags.HasTagExact(WorldWeatherTags::Weather_Precipitation_Rain));
+	TestTrue(TEXT("Warm: the ground is wet, no snow"), FMath::IsNearlyEqual(Warm.Wetness, 0.8f) && Warm.SnowCover == 0.0f);
+	TestTrue(TEXT("Heavy rain tagged"), Warm.Tags.HasTagExact(WorldWeatherTags::Weather_Intensity_Heavy) && Warm.Tags.HasTagExact(WorldWeatherTags::Weather_Preset_Rain));
+	TestTrue(TEXT("A breeze tagged"), Warm.Tags.HasTagExact(WorldWeatherTags::Weather_Wind_Breeze) && !Warm.Tags.HasTag(WorldWeatherTags::Weather_Storm));
+	Climate.bUnderwater = true;
+	const FWorldWeatherConditions Under = UWorldWeatherMath::Resolve(Rain, WorldWeatherTags::Weather_Preset_Rain, Climate, 15.0f, 0.8f, 0.6f, 0.0f, 0.0, Rules);
+	TestTrue(TEXT("Underwater: nothing falls, sheltered"), Under.PrecipitationType == EWorldWeatherPrecipitation::None && Under.Tags.HasTagExact(WorldWeatherTags::Weather_Sheltered));
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Lightning: the strike hash's rate over many minutes, deterministic, none at rate 0.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldWeatherLightningTest, "WorldWeather.Math.Lightning", WORLDWEATHER_TEST_FLAGS)
+bool FWorldWeatherLightningTest::RunTest(const FString& Parameters)
+{
+	int32 Strikes = 0;
+	const int32 Minutes = 20000;
+	for (int64 M = 0; M < Minutes; ++M)
+	{
+		float Second = 0.0f;
+		if (UWorldWeatherMath::StrikeInMinute(42, M, 0.3f, Second))
+		{
+			++Strikes;
+			TestTrue(TEXT("The strike's second within the minute"), Second >= 0.0f && Second < 60.0f);
+		}
+	}
+	AddInfo(FString::Printf(TEXT("Rate 0.3 over %d minutes: %d strikes (%.3f a minute)"), Minutes, Strikes, static_cast<float>(Strikes) / Minutes));
+	TestTrue(TEXT("The rate holds within 5 percent"), FMath::Abs(static_cast<float>(Strikes) / Minutes - 0.3f) < 0.015f);
+	float S1 = 0.0f, S2 = 0.0f;
+	const bool A = UWorldWeatherMath::StrikeInMinute(42, 777, 0.5f, S1);
+	const bool B = UWorldWeatherMath::StrikeInMinute(42, 777, 0.5f, S2);
+	TestTrue(TEXT("The same minute and seed strike the same"), A == B && S1 == S2);
+	TestFalse(TEXT("Rate 0 never strikes"), UWorldWeatherMath::StrikeInMinute(42, 777, 0.0f, S1));
+	int32 Every = 0;
+	for (int64 M = 0; M < 100; ++M)
+	{
+		Every += UWorldWeatherMath::StrikeInMinute(42, M, 1.0f, S1) ? 1 : 0;
+	}
+	TestEqual(TEXT("Rate 1 strikes every minute"), Every, 100);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// A sync point and a clock time give the front, the tag and whether the hold is over.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldWeatherSyncResolveTest, "WorldWeather.Sync.Resolve", WORLDWEATHER_TEST_FLAGS)
+bool FWorldWeatherSyncResolveTest::RunTest(const FString& Parameters)
+{
+	const FWorldWeatherFront Clear = MakeFront(0.1f, 0.0f, 0.0f, 100.0f, 0.0f, 0.2f, 0.0f, 2.0f, 0.2f);
+	const FWorldWeatherFront Storm = MakeFront(1.0f, 1.0f, 0.3f, 900.0f, 90.0f, 0.8f, 0.5f, -4.0f, 1.0f);
+	const FWorldWeatherSyncPoint Sync = MakeSync(Clear, Storm, 3600.0, 600.0f, 1800.0f);
+	TestTrue(TEXT("Before the start: the front left"), UWorldWeatherMath::ResolveFront(Sync, 3000.0).CloudCover == 0.1f);
+	TestTrue(TEXT("Before the start: its tag"), UWorldWeatherMath::ResolveTag(Sync, 3000.0) == WorldWeatherTags::Weather_Preset_Clear);
+	const FWorldWeatherFront Quarter = UWorldWeatherMath::ResolveFront(Sync, 3750.0);
+	TestEqual(TEXT("A quarter in: a quarter of the way"), Quarter.Precipitation, 0.25f, 1.0e-5f);
+	TestTrue(TEXT("A quarter in: still the old tag"), UWorldWeatherMath::ResolveTag(Sync, 3750.0) == WorldWeatherTags::Weather_Preset_Clear);
+	TestTrue(TEXT("Half way: the new tag"), UWorldWeatherMath::ResolveTag(Sync, 3900.0) == WorldWeatherTags::Weather_Preset_Storm);
+	TestTrue(TEXT("After the blend: the front arrived at"), UWorldWeatherMath::ResolveFront(Sync, 5000.0).WindSpeed == 900.0f);
+	TestFalse(TEXT("During the hold: not over"), UWorldWeatherMath::IsHoldOver(Sync, 5999.0));
+	TestTrue(TEXT("At the hold's end: over"), UWorldWeatherMath::IsHoldOver(Sync, 6000.0));
+	FWorldWeatherSyncPoint Empty;
+	TestFalse(TEXT("No publish yet: not valid"), Empty.IsValid());
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The subsystem in a game world without a provider: Z up, the settings' temperature, exposure 1; SetWeather, the tags; the
+// export round trip; setters refused nowhere (standalone is the authority).
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldWeatherSubsystemDefaultsTest, "WorldWeather.Subsystem.Defaults", WORLDWEATHER_TEST_FLAGS)
+bool FWorldWeatherSubsystemDefaultsTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("WorldWeatherDefaultsTest"));
+	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+	Context.SetCurrentWorld(World);
+	UWorldWeatherSubsystem* Weather = World->GetSubsystem<UWorldWeatherSubsystem>();
+	UWorldClockSubsystem* Clock = World->GetSubsystem<UWorldClockSubsystem>();
+	if (TestNotNull(TEXT("The game world has weather"), Weather) && TestNotNull(TEXT("... and a clock"), Clock))
+	{
+		const UWorldWeatherSettings* Settings = UWorldWeatherSettings::Get();
+		TestNotNull(TEXT("A preset table (the defaults)"), Weather->GetPresetTable());
+		TestEqual(TEXT("Seven presets"), Weather->GetPresetTable() ? Weather->GetPresetTable()->Presets.Num() : 0, 7);
+		TestFalse(TEXT("No weather before the first draw"), Weather->HasWeather());
+
+		const FVector Here(12345.0, -6789.0, 250.0);
+		const FWorldWeatherClimateSample Climate = Weather->GetClimateAt(Here);
+		TestTrue(TEXT("No provider: Z up"), Climate.Up.Equals(FVector::UpVector));
+		TestEqual(TEXT("No provider: the settings' temperature"), Climate.Temperature, Settings->DefaultTemperature);
+		TestEqual(TEXT("No provider: exposure 1 (nothing to hit)"), Weather->GetExposureAt(Here), 1.0f);
+
+		Clock->SetTimeOfDay(12.0f);
+		const double Noon = Weather->GetClockSeconds();
+		TestTrue(TEXT("The clock's seconds: day 1 noon"), FMath::IsNearlyEqual(Noon, 12.0 * 3600.0, 1.0));
+
+		TestTrue(TEXT("SetWeather(Storm)"), Weather->SetWeather(WorldWeatherTags::Weather_Preset_Storm, 0.0f));
+		TestTrue(TEXT("Weather now"), Weather->HasWeather());
+		TestTrue(TEXT("The present preset"), Weather->GetCurrentPreset() == WorldWeatherTags::Weather_Preset_Storm);
+		TestEqual(TEXT("A zero blend is done"), Weather->GetBlendAlpha(), 1.0f);
+		const FWorldWeatherConditions C = Weather->GetConditionsAt(Here);
+		const float ExpectedC = UWorldWeatherMath::TemperatureC(Settings->DefaultTemperature, Settings->ColdTemperatureC, Settings->HotTemperatureC, Clock->GetDaylight(),
+			Settings->NightCoolingC, C.Front.TemperatureOffset);
+		AddInfo(FString::Printf(TEXT("Storm at noon: %.1f C, %s, tags %s"), C.TemperatureC, *UEnum::GetValueAsString(C.PrecipitationType), *C.Tags.ToStringSimple()));
+		TestEqual(TEXT("The temperature from the settings and the front"), C.TemperatureC, ExpectedC, 1.0e-3f);
+		TestTrue(TEXT("Rain in a storm at the default temperature"), C.PrecipitationType == EWorldWeatherPrecipitation::Rain);
+		TestTrue(TEXT("Storm tags"), C.Tags.HasTagExact(WorldWeatherTags::Weather_Storm) && C.Tags.HasTagExact(WorldWeatherTags::Weather_Wind_Strong)
+			&& C.Tags.HasTagExact(WorldWeatherTags::Weather_Preset_Storm) && C.Tags.HasTagExact(WorldWeatherTags::Weather_Intensity_Heavy));
+		TestTrue(TEXT("The wind in the XY plane"), FMath::IsNearlyZero(C.WindVector.Z, 1.0e-4) && C.WindVector.Size() > 100.0);
+		TestFalse(TEXT("A wrong tag is refused"), Weather->SetWeather(FGameplayTag::RequestGameplayTag(TEXT("Weather.Precipitation.Rain")), 0.0f));
+
+		// A blend half way: the tag flips, the front is between.
+		Weather->SetWeather(WorldWeatherTags::Weather_Preset_Clear, 600.0f);
+		TestTrue(TEXT("Blending: still the storm"), Weather->GetCurrentPreset() == WorldWeatherTags::Weather_Preset_Storm);
+		Clock->SetTimeOfDay(12.1f); // 360 s in: alpha 0.6
+		TestTrue(TEXT("Past half way: clear"), Weather->GetCurrentPreset() == WorldWeatherTags::Weather_Preset_Clear);
+		TestEqual(TEXT("Alpha 0.6"), Weather->GetBlendAlpha(), 0.6f, 2.0e-3f);
+		const FWorldWeatherFront Mid = Weather->GetCurrentFront();
+		TestTrue(TEXT("The front between"), Mid.Precipitation > 0.3f && Mid.Precipitation < 0.5f);
+
+		// The schedule's own draw, and the lock.
+		Weather->SkipToNext();
+		TestTrue(TEXT("SkipToNext draws a front"), Weather->GetSyncPoint().ToTag.IsValid() && Weather->GetSyncPoint().Serial >= 3);
+		TestFalse(TEXT("Not locked"), Weather->IsLocked());
+		Weather->SetLocked(true);
+		TestTrue(TEXT("Locked"), Weather->IsLocked());
+
+		// Export and import round trip.
+		const FWorldWeatherSaveState Saved = Weather->ExportState();
+		TestTrue(TEXT("Exported the sync point"), Saved.Sync.Serial == Weather->GetSyncPoint().Serial && Saved.bLocked);
+		Weather->SetLocked(false);
+		Weather->SetWeather(WorldWeatherTags::Weather_Preset_Fog, 0.0f);
+		Weather->ImportState(Saved);
+		const FWorldWeatherSyncPoint Back = Weather->GetSyncPoint();
+		TestTrue(TEXT("Imported: the sync point back"), Back.Serial == Saved.Sync.Serial && Back.ToTag == Saved.Sync.ToTag && Back.StartSeconds == Saved.Sync.StartSeconds
+			&& Back.FromFront.WindSpeed == Saved.Sync.FromFront.WindSpeed);
+		TestTrue(TEXT("Imported: locked again"), Weather->IsLocked());
+		TestEqual(TEXT("Imported: the schedule's place"), Weather->ExportState().ScheduleIndex, Saved.ScheduleIndex);
+
+		// The wind setter keeps the preset.
+		Weather->SetWind(270.0f, 400.0f);
+		const FWorldWeatherSyncPoint Wind = Weather->GetSyncPoint();
+		TestTrue(TEXT("SetWind: the front's wind"), Wind.ToFront.WindAzimuth == 270.0f && Wind.ToFront.WindSpeed == 400.0f && Wind.ToTag == Back.ToTag);
+	}
+	GEngine->DestroyWorldContext(World);
+	World->DestroyWorld(false);
+	return true;
+}
+
+#undef WORLDWEATHER_TEST_FLAGS
+
+#endif // WITH_DEV_AUTOMATION_TESTS
