@@ -6,14 +6,20 @@
 #include "WorldWeatherPreset.h"
 #include "WorldWeatherSettings.h"
 #include "WorldWeatherState.h"
+#include "WorldWeatherViewer.h"
 
+#include "Camera/PlayerCameraManager.h"
 #include "CollisionQueryParams.h"
 #include "Curves/CurveFloat.h"
+#include "DayNightController.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
+#include "Kismet/KismetMaterialLibrary.h"
+#include "Materials/MaterialParameterCollection.h"
+#include "Misc/CoreMisc.h"
 #include "WorldClockSubsystem.h"
 #include "WorldClockTypes.h"
 
@@ -35,13 +41,36 @@ void UWorldWeatherSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Collection.InitializeDependency<UWorldClockSubsystem>();
 
 	const UWorldWeatherSettings* Settings = UWorldWeatherSettings::Get();
-	Table = Settings->PresetTable.IsNull() ? nullptr : Settings->PresetTable.LoadSynchronous();
+	// A named asset that is not there (the content script not run yet, a cooked build without it) is quietly the default:
+	// the package is looked for before the load, which would log a warning.
+	auto LoadIfPresent = [](const FSoftObjectPath& Path) -> UObject*
+	{
+		return !Path.IsNull() && FPackageName::DoesPackageExist(Path.GetLongPackageName()) ? Path.TryLoad() : nullptr;
+	};
+	Table = Cast<UWorldWeatherPresetTable>(LoadIfPresent(Settings->PresetTable.ToSoftObjectPath()));
 	if (!Table || Table->Presets.Num() == 0)
 	{
 		Table = NewObject<UWorldWeatherPresetTable>(this, TEXT("DefaultWeatherPresets"));
 		Table->ResetToDefaults();
 	}
-	TemperatureCurve = Settings->TemperatureCurve.IsNull() ? nullptr : Settings->TemperatureCurve.LoadSynchronous();
+	TemperatureCurve = Cast<UCurveFloat>(LoadIfPresent(Settings->TemperatureCurve.ToSoftObjectPath()));
+	WeatherCollection = Cast<UMaterialParameterCollection>(LoadIfPresent(Settings->WeatherCollection.ToSoftObjectPath()));
+	for (const FWorldWeatherMirrorEntry& Entry : Settings->MirrorTable)
+	{
+		UMaterialParameterCollection* MPC = Cast<UMaterialParameterCollection>(LoadIfPresent(Entry.Collection.ToSoftObjectPath()));
+		if (!MPC || Entry.Parameter.IsNone())
+		{
+			UE_LOG(LogWorldWeather, Warning, TEXT("WorldWeather: the mirror entry %s / %s names no collection or no parameter; skipped."),
+				*Entry.Collection.ToString(), *Entry.Parameter.ToString());
+			continue;
+		}
+		FWorldWeatherMirrorTarget& Target = MirrorTargets.AddDefaulted_GetRef();
+		Target.Collection = MPC;
+		Target.Parameter = Entry.Parameter;
+		Target.Source = Entry.Source;
+		Target.Scale = Entry.Scale;
+		Target.Offset = Entry.Offset;
+	}
 }
 
 void UWorldWeatherSubsystem::OnWorldBeginPlay(UWorld& InWorld)
@@ -57,8 +86,8 @@ void UWorldWeatherSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 			Publish(); // a front set before play (ImportState, a test) reaches the clients
 		}
 	}
-	UE_LOG(LogWorldWeather, Log, TEXT("WorldWeather: %s starts with %d presets (%s)."), *InWorld.GetName(), Table ? Table->Presets.Num() : 0,
-		HasAuthority() ? TEXT("authority") : TEXT("client"));
+	UE_LOG(LogWorldWeather, Log, TEXT("WorldWeather: %s starts with %d presets, %s, %d mirror targets (%s)."), *InWorld.GetName(), Table ? Table->Presets.Num() : 0,
+		WeatherCollection ? *WeatherCollection->GetName() : TEXT("no weather collection"), MirrorTargets.Num(), HasAuthority() ? TEXT("authority") : TEXT("client"));
 }
 
 void UWorldWeatherSubsystem::Deinitialize()
@@ -66,6 +95,7 @@ void UWorldWeatherSubsystem::Deinitialize()
 	State = nullptr;
 	ClimateProvider = nullptr;
 	ShelterProvider = nullptr;
+	Viewers.Reset();
 	Super::Deinitialize();
 }
 
@@ -96,6 +126,7 @@ void UWorldWeatherSubsystem::Tick(float DeltaTime)
 	}
 	FireEdgeEvents(Now);
 	TickLightning(Now);
+	TickSky(DeltaTime, Now);
 }
 
 bool UWorldWeatherSubsystem::HasAuthority() const
@@ -199,6 +230,12 @@ bool UWorldWeatherSubsystem::IsLocked() const
 	}
 	FindSync();
 	return State && State->IsLocked();
+}
+
+float UWorldWeatherSubsystem::GetLightningFlash() const
+{
+	const float Seconds = FMath::Max(UWorldWeatherSettings::Get()->LightningFlashSeconds, 0.01f);
+	return FMath::Clamp(FlashRemaining / Seconds, 0.0f, 1.0f);
 }
 
 FWorldWeatherClimateSample UWorldWeatherSubsystem::GetClimateAt(const FVector& WorldPos) const
@@ -362,6 +399,24 @@ FVector UWorldWeatherSubsystem::GetReferencePoint() const
 	return FVector::ZeroVector;
 }
 
+FVector UWorldWeatherSubsystem::GetLocalViewPoint() const
+{
+	const UWorld* World = GetWorld();
+	const APlayerController* PC = World && GEngine ? GEngine->GetFirstLocalPlayerController(World) : nullptr;
+	if (PC)
+	{
+		if (PC->PlayerCameraManager)
+		{
+			return PC->PlayerCameraManager->GetCameraLocation();
+		}
+		if (const APawn* Pawn = PC->GetPawn())
+		{
+			return Pawn->GetActorLocation();
+		}
+	}
+	return GetReferencePoint();
+}
+
 bool UWorldWeatherSubsystem::DrawNext(double Now, bool bFirst)
 {
 	if (!Table || Table->Presets.Num() == 0)
@@ -488,6 +543,7 @@ void UWorldWeatherSubsystem::SetLocked(bool bInLocked)
 
 void UWorldWeatherSubsystem::Strike(const FVector& Location)
 {
+	FlashRemaining = UWorldWeatherSettings::Get()->LightningFlashSeconds;
 	OnLightning.Broadcast(Location);
 }
 
@@ -573,16 +629,8 @@ void UWorldWeatherSubsystem::TickLightning(double Now)
 	if (Now - static_cast<double>(Minute) * 60.0 >= Second)
 	{
 		// The place is this machine's: around its first local player's view, else the authority's reference point.
-		const UWorld* World = GetWorld();
-		const APlayerController* PC = World && GEngine ? GEngine->GetFirstLocalPlayerController(World) : nullptr;
-		FVector Centre = GetReferencePoint();
-		FVector Up = FVector::UpVector;
-		if (PC)
-		{
-			FRotator Rot;
-			PC->GetPlayerViewPoint(Centre, Rot);
-		}
-		Up = GetClimateAt(Centre).Up;
+		const FVector Centre = GetLocalViewPoint();
+		const FVector Up = GetClimateAt(Centre).Up;
 		FVector North, East;
 		UWorldWeatherMath::LocalFrame(Up, North, East);
 		const float Angle = FMath::FRandRange(0.0f, UE_TWO_PI);
@@ -590,4 +638,193 @@ void UWorldWeatherSubsystem::TickLightning(double Now)
 		Strike(Centre + (North * FMath::Cos(Angle) + East * FMath::Sin(Angle)) * Radius);
 		LastStruckMinute = Minute;
 	}
+}
+
+// --- The sky (P1) ---
+
+void UWorldWeatherSubsystem::FillModifiers(const FWorldWeatherFront& Front, float Flash, const UWorldWeatherSettings& S, FDayNightModifiers& Out)
+{
+	const float Cover = FMath::Clamp(Front.CloudCover, 0.0f, 1.0f);
+	Out.SunIntensityScale = FMath::Max(1.0f - Cover * S.SunDimByCloudCover - FMath::Clamp(Front.Precipitation, 0.0f, 1.0f) * S.SunDimByPrecipitation, S.SunScaleMin);
+	Out.SkyLightIntensityScale = FMath::Max(1.0f - Cover * S.SkyLightDimByCloudCover, 0.0f);
+	Out.FogDensityScale = 1.0f + FMath::Clamp(Front.FogDensity, 0.0f, 1.0f) * S.FogDensityScaleByFog;
+	Out.FogTint = FMath::Lerp(FLinearColor::White, S.FogTintOvercast, Cover);
+	Out.CloudCoverage = FMath::Lerp(S.CloudCoverageMin, S.CloudCoverageMax, Cover);
+	Out.CloudDensity = FMath::Lerp(S.CloudDensityMin, S.CloudDensityMax, FMath::Clamp(Front.CloudDensity, 0.0f, 1.0f));
+	Out.LightningFlash = FMath::Clamp(Flash, 0.0f, 1.0f);
+}
+
+float UWorldWeatherSubsystem::MirrorScalar(EWorldWeatherMirrorSource Source, const FWorldWeatherFront& Front, float Wetness, float SnowCover, float TemperatureC, float Gust) const
+{
+	const UWorldWeatherSettings* S = UWorldWeatherSettings::Get();
+	switch (Source)
+	{
+	case EWorldWeatherMirrorSource::CloudCover: return Front.CloudCover;
+	case EWorldWeatherMirrorSource::CloudDensity: return Front.CloudDensity;
+	case EWorldWeatherMirrorSource::Precipitation: return Front.Precipitation;
+	case EWorldWeatherMirrorSource::FogDensity: return Front.FogDensity;
+	case EWorldWeatherMirrorSource::WindSpeed: return Front.WindSpeed;
+	case EWorldWeatherMirrorSource::WindIntensity: return FMath::Clamp(Front.WindSpeed / FMath::Max(S->StrongWindAbove, 1.0f), 0.0f, 1.0f);
+	case EWorldWeatherMirrorSource::GustFactor: return Gust;
+	case EWorldWeatherMirrorSource::Gustiness: return Front.Gustiness;
+	case EWorldWeatherMirrorSource::ThunderRate: return Front.ThunderRate;
+	case EWorldWeatherMirrorSource::Humidity: return Front.Humidity;
+	case EWorldWeatherMirrorSource::Wetness: return Wetness;
+	case EWorldWeatherMirrorSource::SnowCover: return SnowCover;
+	case EWorldWeatherMirrorSource::TemperatureC: return TemperatureC;
+	case EWorldWeatherMirrorSource::LightningFlash: return GetLightningFlash();
+	default: return 0.0f;
+	}
+}
+
+void UWorldWeatherSubsystem::TickSky(float DeltaTime, double Now)
+{
+	const UWorldWeatherSettings* S = UWorldWeatherSettings::Get();
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+	const double Start = FPlatformTime::Seconds();
+	FlashRemaining = FMath::Max(FlashRemaining - DeltaTime, 0.0f);
+	const float Flash = GetLightningFlash();
+	const FWorldWeatherFront Front = GetCurrentFront();
+
+	// The clock controller's slot (D61): found by class once one exists, looked for again every second until then.
+	if (S->bDriveSky)
+	{
+		if (!SkyController.IsValid() && World->GetTimeSeconds() >= NextControllerSearch)
+		{
+			NextControllerSearch = World->GetTimeSeconds() + 1.0;
+			for (TActorIterator<ADayNightController> It(World); It; ++It)
+			{
+				SkyController = *It;
+				break;
+			}
+		}
+		if (ADayNightController* Controller = SkyController.Get())
+		{
+			FDayNightModifiers M;
+			FillModifiers(Front, Flash, *S, M);
+			Controller->SetModifiers(M);
+		}
+	}
+
+	// MPC_Weather and the mirror table (D64), at this machine's view.
+	if (WeatherCollection || MirrorTargets.Num() > 0)
+	{
+		const FVector View = GetLocalViewPoint();
+		const FWorldWeatherClimateSample Climate = GetClimateAt(View);
+		const float Gust = UWorldWeatherMath::GustFactor(Now, Front.Gustiness);
+		const FVector Wind = UWorldWeatherMath::WindVector(Front.WindSpeed, Front.WindAzimuth, Climate.Up, 0.0f, Now);
+		const FVector WindDir = Wind.GetSafeNormal();
+		float Wetness = 0.0f, SnowCover = 0.0f;
+		if (const FWorldWeatherSyncPoint* Sp = FindSync())
+		{
+			UWorldWeatherMath::IntegrateAccumulators(*Sp, Now, S->MakeRates(), Wetness, SnowCover);
+		}
+		const float TemperatureC = GetTemperatureAt(View);
+		if (WeatherCollection)
+		{
+			static const FName Names[] = { TEXT("CloudCover"), TEXT("CloudDensity"), TEXT("Precipitation"), TEXT("FogDensity"), TEXT("WindSpeed"), TEXT("WindIntensity"),
+				TEXT("GustFactor"), TEXT("Gustiness"), TEXT("ThunderRate"), TEXT("Humidity"), TEXT("Wetness"), TEXT("SnowCover"), TEXT("TemperatureC"), TEXT("LightningFlash") };
+			static const EWorldWeatherMirrorSource Sources[] = { EWorldWeatherMirrorSource::CloudCover, EWorldWeatherMirrorSource::CloudDensity, EWorldWeatherMirrorSource::Precipitation,
+				EWorldWeatherMirrorSource::FogDensity, EWorldWeatherMirrorSource::WindSpeed, EWorldWeatherMirrorSource::WindIntensity, EWorldWeatherMirrorSource::GustFactor,
+				EWorldWeatherMirrorSource::Gustiness, EWorldWeatherMirrorSource::ThunderRate, EWorldWeatherMirrorSource::Humidity, EWorldWeatherMirrorSource::Wetness,
+				EWorldWeatherMirrorSource::SnowCover, EWorldWeatherMirrorSource::TemperatureC, EWorldWeatherMirrorSource::LightningFlash };
+			for (int32 i = 0; i < UE_ARRAY_COUNT(Names); ++i)
+			{
+				UKismetMaterialLibrary::SetScalarParameterValue(World, WeatherCollection, Names[i], MirrorScalar(Sources[i], Front, Wetness, SnowCover, TemperatureC, Gust));
+			}
+			UKismetMaterialLibrary::SetVectorParameterValue(World, WeatherCollection, TEXT("WindDirection"), FLinearColor(WindDir.X, WindDir.Y, WindDir.Z, Front.WindSpeed));
+		}
+		for (const FWorldWeatherMirrorTarget& T : MirrorTargets)
+		{
+			if (!T.Collection)
+			{
+				continue;
+			}
+			if (T.Source == EWorldWeatherMirrorSource::WindDirection)
+			{
+				UKismetMaterialLibrary::SetVectorParameterValue(World, T.Collection, T.Parameter, FLinearColor(WindDir.X, WindDir.Y, WindDir.Z, Front.WindSpeed));
+			}
+			else
+			{
+				UKismetMaterialLibrary::SetScalarParameterValue(World, T.Collection, T.Parameter, MirrorScalar(T.Source, Front, Wetness, SnowCover, TemperatureC, Gust) * T.Scale + T.Offset);
+			}
+		}
+	}
+
+	UpdateViewers();
+
+	// The cost, for ww.Weather: the last tick's and a one-second average.
+	const double Ms = (FPlatformTime::Seconds() - Start) * 1000.0;
+	SkyWriteLastMs = static_cast<float>(Ms);
+	SkyWriteWindowSum += Ms;
+	++SkyWriteWindowCount;
+	if (World->GetTimeSeconds() - SkyWriteWindowStart >= 1.0)
+	{
+		SkyWriteAverageMs = static_cast<float>(SkyWriteWindowSum / FMath::Max(SkyWriteWindowCount, 1));
+		SkyWriteWindowStart = World->GetTimeSeconds();
+		SkyWriteWindowSum = 0.0;
+		SkyWriteWindowCount = 0;
+	}
+}
+
+void UWorldWeatherSubsystem::UpdateViewers()
+{
+	UWorld* World = GetWorld();
+	if (!World || !UWorldWeatherSettings::Get()->bAutoSpawnViewers || IsRunningDedicatedServer())
+	{
+		return;
+	}
+	// Drop the viewers whose player is gone.
+	for (int32 i = Viewers.Num() - 1; i >= 0; --i)
+	{
+		AWorldWeatherViewer* V = Viewers[i];
+		if (!V || !V->GetPlayer())
+		{
+			if (V)
+			{
+				V->Destroy();
+			}
+			Viewers.RemoveAt(i);
+		}
+	}
+	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+	{
+		APlayerController* PC = It->Get();
+		if (!PC || !PC->IsLocalController())
+		{
+			continue;
+		}
+		const bool bHas = Viewers.ContainsByPredicate([PC](const AWorldWeatherViewer* V) { return V && V->GetPlayer() == PC; });
+		if (bHas)
+		{
+			continue;
+		}
+		FActorSpawnParameters Params;
+		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		Params.ObjectFlags |= RF_Transient;
+		AWorldWeatherViewer* Viewer = World->SpawnActor<AWorldWeatherViewer>(AWorldWeatherViewer::StaticClass(), FTransform::Identity, Params);
+		if (Viewer)
+		{
+			Viewer->SetPlayer(PC);
+			Viewers.Add(Viewer);
+			UE_LOG(LogWorldWeather, Log, TEXT("WorldWeather: a viewer for %s."), *PC->GetName());
+		}
+	}
+}
+
+TArray<AWorldWeatherViewer*> UWorldWeatherSubsystem::GetViewers() const
+{
+	TArray<AWorldWeatherViewer*> Out;
+	for (AWorldWeatherViewer* V : Viewers)
+	{
+		if (V)
+		{
+			Out.Add(V);
+		}
+	}
+	return Out;
 }

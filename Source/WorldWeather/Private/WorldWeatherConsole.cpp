@@ -80,6 +80,10 @@ namespace WorldWeatherConsole
 			*Weather->GetCurrentPreset().ToString(), *Sync.FromTag.ToString(), *Sync.ToTag.ToString(), Weather->GetBlendAlpha(), Sync.Serial,
 			Weather->IsLocked() ? TEXT(", locked") : TEXT(""), Weather->GetClockSeconds(), Weather->GetWetness(), Weather->GetSnowCover());
 		UE_LOG(LogWorldWeather, Display, TEXT("ww.Weather: front %s"), *FrontText(Weather->GetCurrentFront()));
+		float LastMs = 0.0f, AverageMs = 0.0f;
+		Weather->GetSkyWriteCost(LastMs, AverageMs);
+		UE_LOG(LogWorldWeather, Display, TEXT("ww.Weather: sky controller %s, %d viewer(s), flash %.2f; the sky, collection and mirror writes %.3f ms last tick, %.3f ms average"),
+			Weather->GetSkyController() ? TEXT("driven") : TEXT("none"), Weather->GetViewers().Num(), Weather->GetLightningFlash(), LastMs, AverageMs);
 		if (Sync.IsValid())
 		{
 			UE_LOG(LogWorldWeather, Display, TEXT("ww.Weather: blend %.0f s from clock %.0f s, hold %.0f s (next draw at %.0f s)"), Sync.BlendSeconds, Sync.StartSeconds,
