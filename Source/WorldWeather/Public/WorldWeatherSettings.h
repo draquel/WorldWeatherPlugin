@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
+#include "Engine/EngineTypes.h"
 #include "GameplayTagContainer.h"
 #include "WorldWeatherMath.h"
 #include "WorldWeatherSettings.generated.h"

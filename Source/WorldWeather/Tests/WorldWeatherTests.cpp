@@ -425,6 +425,7 @@ bool FWorldWeatherSubsystemDefaultsTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Storm tags"), C.Tags.HasTagExact(WorldWeatherTags::Weather_Storm) && C.Tags.HasTagExact(WorldWeatherTags::Weather_Wind_Strong)
 			&& C.Tags.HasTagExact(WorldWeatherTags::Weather_Preset_Storm) && C.Tags.HasTagExact(WorldWeatherTags::Weather_Intensity_Heavy));
 		TestTrue(TEXT("The wind in the XY plane"), FMath::IsNearlyZero(C.WindVector.Z, 1.0e-4) && C.WindVector.Size() > 100.0);
+		AddExpectedMessage(TEXT("is not a row of the preset table"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 		TestFalse(TEXT("A wrong tag is refused"), Weather->SetWeather(FGameplayTag::RequestGameplayTag(TEXT("Weather.Precipitation.Rain")), 0.0f));
 
 		// A blend half way: the tag flips, the front is between.
