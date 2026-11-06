@@ -1,0 +1,31 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1",
+	"FriendlyName": "World Weather",
+	"Description": "Weather as world state with the clock's shape: an authority-owned timeline of fronts (clouds, precipitation, fog, wind, thunder) scheduled from the world seed and the climate, replicated as one sync point and blended on every machine from the world clock; conditions resolved per position (rain or snow by the temperature, wind in the local frame, shelter by trace); gameplay tags, delegates and console commands. Depends on engine modules, GameplayTags and the World Clock plugin only.",
+	"Category": "Gameplay",
+	"CreatedBy": "Daniel Raquel",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": true,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"EnabledByDefault": true,
+	"Modules": [
+		{
+			"Name": "WorldWeather",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "WorldClockPlugin",
+			"Enabled": true
+		}
+	]
+}
