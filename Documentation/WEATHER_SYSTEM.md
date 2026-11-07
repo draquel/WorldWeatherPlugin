@@ -124,7 +124,33 @@ into the plugin's Content as `NS_WeatherRain` and `NS_WeatherSnow` (tracked; the
 target and `M_WeatherPrecipitation` (unlit translucent: a streak from the sprite's UV, the particle colour, the fade,
 the occlusion), and calls the library.
 
-## 7. Results
+## 7. Materials (P3)
+
+The weather reaches materials through collections only (D64). `MPC_VoxelMaterial` (VoxelWorlds') gained the scalars
+`WindSpeed`, `WindIntensity`, `GustFactor`, `Wetness`, `SnowCover`, `SnowFreezeLevel`, `LocalCold`, `RippleStrength`
+and the vector `WindDirection`; the mirror table in `Config/DefaultGame.ini` fills them every tick, and VoxelWorlds'
+materials read them with no knowledge of this plugin. Three sources were added for it: `WindAzimuth` (the front's
+azimuth in degrees, for a pack's scalar wind direction, turned into the pack's convention by the entry's Scale and
+Offset), `FreezeLevel` (the climate temperature, 0..1, at which it snows: `SnowBelowC` inverted through the settings'
+linear map, `UWorldWeatherMath::FreezeLevel`) and `ColdFactor` (the cold at the local viewer, 1 at or under `SnowBelowC`,
+0 a sleet band above). A mirror entry naming a collection that is not installed (the Spruce pack's `MPC_Global`) is
+skipped with a log line, not a warning.
+
+What the materials do with them (VoxelWorlds' `MATERIAL_SYSTEM.md`, `SCATTER_SYSTEM.md`, `WATER_SYSTEM.md`): the
+terrain masters darken and smooth the ground with `Wetness` and whiten it with `SnowCover` where the vertex's biome sits
+below the freeze level (the ends of the biome's temperature range from a per-world lookup texture the renderer builds,
+`FVoxelBiomeLookup`, against `SnowFreezeLevel`; a biome spanning most of the climate, alpine or coast, takes the
+viewer's `LocalCold` instead: one global front, snow on the tundra, the taiga and the cold slopes about a player in the
+cold, rain on the meadow, at every LOD and on the far field alike), on the faces that look along the local up; the cross billboards' master leans
+the quad with `WindDirection` by `WindIntensity` and `GustFactor`; the sea's normal ripples along the wind by
+`RippleStrength`. The Spruce pack's foliage moves through its own `MPC_Global` (`Wind Intensity`, `Wind Direction`),
+two mirror entries, no edit to the pack. The Megascans foliage master keeps its own per-instance wind (a static switch
+and local scalars): its intensity does not follow the weather, which would take a material instance per scatter
+definition written through a named dynamic instance; those plants wait. The Megaplants' baked static meshes have no
+wind at all; their skinned assemblies are the scatter rendering slice the plan names, not a material input, and are not
+part of this phase.
+
+## 8. Results
 
 ### P0 (2026-11-06): the plugin and the core
 
@@ -177,3 +203,18 @@ radial up, clipped at the grass with the capture on, whole with it off) and snow
 the capture every 4 frames (the default), 6.00 every frame: about 0.4 ms for both at the defaults, under the plan's 0.5.
 The pack's emitters simulate on the CPU (`DescribeSystem`); a GPU emitter is a content change for later. The capture
 runs the full renderer at 512 px for a depth: its cost is the renderer's, not the resolution's.
+
+### P3 (2026-11-07): the material inputs
+
+The collection's inputs, the mirror table, VoxelWorlds' biome lookup and the material edits of section 7; the Spruce
+pack's foliage through its own collection. Seen in PIE (`weather_shots.py`, now with `--post` to run the clock forward
+and `--local` for a planet's local noon): on `SmoothTerrain_Planet` at 65 N on taiga ground under a Snow front run two
+game hours (snow cover 0.95, -1.6 C) the dark soil goes pale and glossy with snow, while the same front at 20 N
+(17.5 C, rain, wetness 1.0) darkens and glosses the meadow and whitens nothing; on `VoxelDemo` an hour of Rain darkens
+the ground, the lake ripples with the wind (a storm's 900 uu/s against a calm) and the Spruce trees move with the wind
+set by `ww.Wind 90 800` (the tree region of two frames differs four times more than the rock beside it). The cross
+billboards' master compiles, but no billboard stood near the cubic survey camera, so its lean is not seen yet. The
+masters compile on the next editor launch (the terrain masters take minutes, which blocks an editor that recompiles
+them in a slow task: the script runs headless). Two lessons: a vector parameter's main material output is three
+components, its alpha a separate pin; and a biome's mid temperature is no guide for a biome spanning the climate
+(Alpine, Coast), hence `LocalCold`.

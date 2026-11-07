@@ -107,6 +107,18 @@ float UWorldWeatherMath::TemperatureC(float Temperature01, float ColdC, float Ho
 	return FMath::Lerp(ColdC, HotC, FMath::Clamp(Temperature01, 0.0f, 1.0f)) - NightCoolingC * (1.0f - FMath::Clamp(Daylight, 0.0f, 1.0f)) + FrontOffsetC;
 }
 
+// Not inlined: the test calls it with a degenerate map in the same unity file, and the compiler, folding the call, reports
+// the guarded division as a divide by zero (C4723, an error in this build).
+FORCENOINLINE float UWorldWeatherMath::FreezeLevel(float ColdC, float HotC, float SnowBelowC)
+{
+	const float Span = HotC - ColdC;
+	if (FMath::Abs(Span) <= KINDA_SMALL_NUMBER)
+	{
+		return 0.0f;
+	}
+	return FMath::Clamp((SnowBelowC - ColdC) / Span, 0.0f, 1.0f);
+}
+
 EWorldWeatherPrecipitation UWorldWeatherMath::PrecipitationType(float InTemperatureC, float Rate, float SnowBelowC, float SleetBandC)
 {
 	if (Rate <= 0.0f)

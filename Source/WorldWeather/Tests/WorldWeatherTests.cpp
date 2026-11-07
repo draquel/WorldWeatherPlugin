@@ -168,6 +168,11 @@ bool FWorldWeatherScheduleTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldWeatherPrecipitationTypeTest, "WorldWeather.Math.PrecipitationType", WORLDWEATHER_TEST_FLAGS)
 bool FWorldWeatherPrecipitationTypeTest::RunTest(const FString& Parameters)
 {
+	// The freeze level (P3): SnowBelowC inverted through the linear map; clamped; 0 for a degenerate map.
+	TestEqual(TEXT("Freeze level: -20..35 C, snow at 0 C"), UWorldWeatherMath::FreezeLevel(-20.0f, 35.0f, 0.0f), 20.0f / 55.0f, 1.0e-6f);
+	TestEqual(TEXT("Freeze level under the cold end clamps to 0"), UWorldWeatherMath::FreezeLevel(5.0f, 35.0f, 0.0f), 0.0f);
+	TestEqual(TEXT("Freeze level over the hot end clamps to 1"), UWorldWeatherMath::FreezeLevel(-20.0f, -5.0f, 0.0f), 1.0f);
+	TestEqual(TEXT("A degenerate map gives 0"), UWorldWeatherMath::FreezeLevel(10.0f, 10.0f, 0.0f), 0.0f);
 	TestTrue(TEXT("No rate: nothing"), UWorldWeatherMath::PrecipitationType(10.0f, 0.0f, 0.0f, 2.0f) == EWorldWeatherPrecipitation::None);
 	TestTrue(TEXT("Warm: rain"), UWorldWeatherMath::PrecipitationType(10.0f, 0.5f, 0.0f, 2.0f) == EWorldWeatherPrecipitation::Rain);
 	TestTrue(TEXT("Freezing: snow"), UWorldWeatherMath::PrecipitationType(0.0f, 0.5f, 0.0f, 2.0f) == EWorldWeatherPrecipitation::Snow);

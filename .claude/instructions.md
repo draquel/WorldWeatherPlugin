@@ -119,6 +119,20 @@
   altitude, the up, under the sea; shelter 0 inside a stamped dungeon's bounds and inside a claim tagged `Claim.Shelter`.
   `ww.Weather` names both providers and prints the climate where the pawn stands.
 
+## The materials (P3; the plan's D64)
+- **Collections only.** VoxelWorlds' `MPC_VoxelMaterial` holds the weather's material inputs (WindDirection, WindSpeed,
+  WindIntensity, GustFactor, Wetness, SnowCover, SnowFreezeLevel, LocalCold, RippleStrength; the parent's
+  `Scripts/setup_weather_materials.py` adds them) and the mirror table in the parent's `Config/DefaultGame.ini` fills
+  them; the Spruce pack's `MPC_Global` gets `Wind Intensity` and `Wind Direction` the same way. Three sources exist for
+  it: `WindAzimuth` (degrees; a pack's scalar direction, Scale and Offset for its convention), `FreezeLevel`
+  (`UWorldWeatherMath::FreezeLevel`: the climate temperature at `SnowBelowC`, so a material can compare a biome's
+  temperature range with the snow line in the climate's own units) and `ColdFactor` (the cold at the local viewer, for
+  a biome whose range says nothing). An entry whose collection is not installed is skipped with a Log line (a Warning
+  when the collection exists but the entry is wrong).
+- **This plugin writes no material.** The terrain's wetness and snow, the billboards' wind and the water's ripples are
+  VoxelWorlds' (`MATERIAL_SYSTEM.md` "Weather surface", `SCATTER_SYSTEM.md` "Billboard Material", `WATER_SYSTEM.md`);
+  the Megascans plants' wind intensity and the Megaplants' wind are not driven (section 7 of the reference says why).
+
 ## Rules
 - Never read the authority's `Sync` on a client: every reader goes through `FindSync()` / the public getters, which
   resolve the replicated state's point.

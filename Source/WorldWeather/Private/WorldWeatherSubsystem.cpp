@@ -58,9 +58,17 @@ void UWorldWeatherSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	WeatherCollection = Cast<UMaterialParameterCollection>(LoadIfPresent(Settings->WeatherCollection.ToSoftObjectPath()));
 	for (const FWorldWeatherMirrorEntry& Entry : Settings->MirrorTable)
 	{
-		UMaterialParameterCollection* MPC = Cast<UMaterialParameterCollection>(LoadIfPresent(Entry.Collection.ToSoftObjectPath()));
+		const FSoftObjectPath CollectionPath = Entry.Collection.ToSoftObjectPath();
+		UMaterialParameterCollection* MPC = Cast<UMaterialParameterCollection>(LoadIfPresent(CollectionPath));
 		if (!MPC || Entry.Parameter.IsNone())
 		{
+			if (!Entry.Parameter.IsNone() && CollectionPath.IsValid() && !FPackageName::DoesPackageExist(CollectionPath.GetLongPackageName()))
+			{
+				// A pack's collection that is not installed in this checkout (the Spruce pack's MPC_Global): quietly nothing.
+				UE_LOG(LogWorldWeather, Log, TEXT("WorldWeather: the mirror entry %s / %s names a collection that is not installed; skipped."),
+					*Entry.Collection.ToString(), *Entry.Parameter.ToString());
+				continue;
+			}
 			UE_LOG(LogWorldWeather, Warning, TEXT("WorldWeather: the mirror entry %s / %s names no collection or no parameter; skipped."),
 				*Entry.Collection.ToString(), *Entry.Parameter.ToString());
 			continue;
@@ -674,6 +682,9 @@ float UWorldWeatherSubsystem::MirrorScalar(EWorldWeatherMirrorSource Source, con
 	case EWorldWeatherMirrorSource::SnowCover: return SnowCover;
 	case EWorldWeatherMirrorSource::TemperatureC: return TemperatureC;
 	case EWorldWeatherMirrorSource::LightningFlash: return GetLightningFlash();
+	case EWorldWeatherMirrorSource::WindAzimuth: return Front.WindAzimuth;
+	case EWorldWeatherMirrorSource::FreezeLevel: return UWorldWeatherMath::FreezeLevel(S->ColdTemperatureC, S->HotTemperatureC, S->SnowBelowC);
+	case EWorldWeatherMirrorSource::ColdFactor: return UWorldWeatherMath::ColdFactor(TemperatureC, S->SnowBelowC, S->SleetBandC);
 	default: return 0.0f;
 	}
 }
