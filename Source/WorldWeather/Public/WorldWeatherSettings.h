@@ -11,6 +11,8 @@
 
 class UCurveFloat;
 class UMaterialParameterCollection;
+class UNiagaraSystem;
+class UTextureRenderTarget2D;
 class UWorldWeatherPresetTable;
 
 /** What a mirror table entry writes into a collection's parameter (the plan's D64). */
@@ -288,6 +290,59 @@ public:
 	/** The local fog's scattering distribution (0 even, toward 1 forward toward the sun). */
 	UPROPERTY(Config, EditAnywhere, Category = "Viewer", meta = (ClampMin = "0", ClampMax = "0.99"))
 	float LocalFogPhaseG = 0.3f;
+
+	// --- The viewer's precipitation (the plan's P2, D63: a Niagara system per type about the camera, occluded by a top-down depth capture) ---
+
+	/** The system for rain and sleet (the content script makes NS_WeatherRain from the pack's). None: no rain is drawn. */
+	UPROPERTY(Config, EditAnywhere, Category = "Precipitation Effects")
+	TSoftObjectPtr<UNiagaraSystem> RainSystem;
+
+	/** The system for snow. None: no snow is drawn. */
+	UPROPERTY(Config, EditAnywhere, Category = "Precipitation Effects")
+	TSoftObjectPtr<UNiagaraSystem> SnowSystem;
+
+	/** The precipitation rate at the viewer under which the system is deactivated (its particles die out). */
+	UPROPERTY(Config, EditAnywhere, Category = "Precipitation Effects", meta = (ClampMin = "0", ClampMax = "1"))
+	float PrecipitationActivateAbove = 0.02f;
+
+	/** How fast rain falls, uu/s: with the wind it sets the streaks' tilt (the system is rotated, not edited). */
+	UPROPERTY(Config, EditAnywhere, Category = "Precipitation Effects", meta = (ClampMin = "1"))
+	float RainFallSpeed = 1500.0f;
+
+	/** How fast snow falls, uu/s: a slow fall drifts far with the wind. */
+	UPROPERTY(Config, EditAnywhere, Category = "Precipitation Effects", meta = (ClampMin = "1"))
+	float SnowFallSpeed = 300.0f;
+
+	/**
+	 * Capture the scene's depth from above the camera along the local up every OcclusionFrames frames into OcclusionTarget,
+	 * so the precipitation material hides the particles under a roof, a canopy, a cave's ceiling (D63). Off: the particles
+	 * fade with the viewer's traced exposure instead (all or nothing about the camera).
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Precipitation Effects")
+	bool bOcclusionCapture = true;
+
+	/**
+	 * The render target the capture writes and the precipitation material samples (a tracked asset the content script makes,
+	 * RT_WeatherOcclusion, one channel float). None: no capture.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Precipitation Effects")
+	TSoftObjectPtr<UTextureRenderTarget2D> OcclusionTarget;
+
+	/** Half the capture's width about the camera, uu (the particles outside it are never occluded). */
+	UPROPERTY(Config, EditAnywhere, Category = "Precipitation Effects", meta = (ClampMin = "1000"))
+	float OcclusionExtent = 10000.0f;
+
+	/** How far above the camera along the local up the capture looks down from, uu (a roof higher than this is missed). */
+	UPROPERTY(Config, EditAnywhere, Category = "Precipitation Effects", meta = (ClampMin = "100"))
+	float OcclusionHeight = 5000.0f;
+
+	/** Frames between captures (the cvar ww.Occlusion.Frames overrides it). */
+	UPROPERTY(Config, EditAnywhere, Category = "Precipitation Effects", meta = (ClampMin = "1", ClampMax = "60"))
+	int32 OcclusionFrames = 4;
+
+	/** A particle this far under the captured depth is still drawn (the capture's resolution and the sprites' size). */
+	UPROPERTY(Config, EditAnywhere, Category = "Precipitation Effects", meta = (ClampMin = "0"))
+	float OcclusionBias = 40.0f;
 
 	/** The rules the pure resolution uses, from the values above. */
 	FWorldWeatherRules MakeRules() const;

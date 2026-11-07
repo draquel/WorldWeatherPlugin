@@ -3,6 +3,7 @@
 #include "WorldWeatherSubsystem.h"
 #include "WorldWeather.h"
 #include "WorldWeatherMath.h"
+#include "DynamicRHI.h"
 #include "WorldWeatherPreset.h"
 #include "WorldWeatherSettings.h"
 #include "WorldWeatherState.h"
@@ -761,12 +762,15 @@ void UWorldWeatherSubsystem::TickSky(float DeltaTime, double Now)
 	const double Ms = (FPlatformTime::Seconds() - Start) * 1000.0;
 	SkyWriteLastMs = static_cast<float>(Ms);
 	SkyWriteWindowSum += Ms;
+	GPUFrameWindowSum += FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles()); // the last frame's GPU time, for the viewer effects' A/B
 	++SkyWriteWindowCount;
 	if (World->GetTimeSeconds() - SkyWriteWindowStart >= 1.0)
 	{
 		SkyWriteAverageMs = static_cast<float>(SkyWriteWindowSum / FMath::Max(SkyWriteWindowCount, 1));
+		GPUFrameAverageMs = static_cast<float>(GPUFrameWindowSum / FMath::Max(SkyWriteWindowCount, 1));
 		SkyWriteWindowStart = World->GetTimeSeconds();
 		SkyWriteWindowSum = 0.0;
+		GPUFrameWindowSum = 0.0;
 		SkyWriteWindowCount = 0;
 	}
 }

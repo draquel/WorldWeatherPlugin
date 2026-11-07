@@ -149,6 +149,30 @@ void UWorldWeatherMath::LocalFrame(const FVector& Up, FVector& OutNorth, FVector
 	OutEast = FVector::CrossProduct(North, U).GetSafeNormal();
 }
 
+void UWorldWeatherMath::OcclusionFrame(const FVector& View, const FVector& Up, float Height, float Extent,
+	FVector& OutOrigin, FVector& OutForward, FVector& OutU, FVector& OutV, FVector& OutCameraUp)
+{
+	const FVector U = Up.GetSafeNormal(KINDA_SMALL_NUMBER, FVector::UpVector);
+	FVector North, East;
+	LocalFrame(U, North, East);
+	const float Width = 2.0f * FMath::Max(Extent, 1.0f);
+	OutOrigin = View + U * Height;
+	OutForward = -U;
+	OutCameraUp = North;
+	// The capture's right is its up crossed into its forward (FRotationMatrix::MakeFromXZ(Forward, North): Y = Z x X):
+	// north x (-up) = -east. Texture U grows along the right, V along the down (-north); both over the width.
+	OutU = -East / Width;
+	OutV = -North / Width;
+}
+
+void UWorldWeatherMath::OcclusionCoords(const FVector& Point, const FVector& Origin, const FVector& Forward, const FVector& U, const FVector& V,
+	FVector2D& OutUV, float& OutDepth)
+{
+	const FVector D = Point - Origin;
+	OutUV = FVector2D(0.5 + FVector::DotProduct(D, U), 0.5 + FVector::DotProduct(D, V));
+	OutDepth = static_cast<float>(FVector::DotProduct(D, Forward));
+}
+
 float UWorldWeatherMath::GustFactor(double Seconds, float Gustiness)
 {
 	const float G = FMath::Clamp(Gustiness, 0.0f, 1.0f);

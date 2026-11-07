@@ -83,7 +83,38 @@
 - **The flash.** `Strike` (the scheduled minute's or `ww.Strike`) sets `FlashRemaining` to `LightningFlashSeconds`;
   `GetLightningFlash` fades it to 0, into the slot and the collection.
 - **The cost.** The slot, the collection and the mirror writes: 0.02 ms a tick on `VoxelDemo` (`ww.Weather` prints the
-  last tick's and a one-second average: `GetSkyWriteCost`).
+  last tick's and a one-second average: `GetSkyWriteCost`), and the GPU frame time averaged over the last second
+  (`GetGPUFrameAverageMs`, the RHI's): the A/B of the viewer's effects through their cvars.
+
+## Precipitation (P2; the plan's D63)
+- **The component.** `UWorldWeatherPrecipitationComponent` on the viewer: a `UNiagaraComponent` and a
+  `USceneCaptureComponent2D`. The viewer feeds it `GetConditionsAt(camera, viewer)` every tick: the system by type
+  (`RainSystem` for rain and sleet, `SnowSystem` for snow, from the settings' Precipitation Effects section), active while
+  the rate at the view is over `PrecipitationActivateAbove`, deactivated (its particles dying out) otherwise; the component
+  rotated so its local -Z is the fall direction `-up x FallSpeed + wind` (`RainFallSpeed`, `SnowFallSpeed`; the systems
+  are local-space, so the box and the velocities lean with it); the user parameters `User.Rate`, `User.Wind`, `User.Up`
+  set when a system exposes them. The particles' material fades with `MPC_Weather.LocalPrecipitation` (the rate at the
+  view, times the traced exposure when the capture is off).
+- **The occlusion capture.** An orthographic scene-depth capture `OcclusionHeight` above the camera looking down the local
+  up over `2 x OcclusionExtent`, every `OcclusionFrames` frames (the cvar `ww.Occlusion.Frames` overrides), into the
+  settings' `OcclusionTarget` (`RT_WeatherOcclusion`, one float channel; the ortho planes manual, 0 to the world's far, so
+  any ground below is in range), lighting, fog, post-processing, translucency and particles off (rain must not occlude
+  rain), the viewer hidden from it. Its frame goes into the collection (`OcclusionOrigin` xyz + the width, `OcclusionU`
+  and `OcclusionV` per world unit, `OcclusionForward` xyz + the bias; V's w 1 while live, 0 when off), and the
+  precipitation material sums `UV = 0.5 + ((P - O) . U, (P - O) . V)` and `depth = (P - O) . Forward`
+  (`UWorldWeatherMath::OcclusionFrame` / `OcclusionCoords`, the same arithmetic as the material's Custom node) and hides
+  the pixel under the captured depth. Dry under a roof, a canopy, a cave's ceiling, with no geometry knowledge; the trace
+  cone stays the gameplay exposure. `ww.Viewer.Occlusion 0` is the A/B (the particles then fade with the exposure).
+- **The content.** The editor's Python reaches no Niagara emitter or renderer, so the plugin has an editor module,
+  `WorldWeatherEditor`, with `UWorldWeatherContentLibrary::BuildPrecipitationSystem` (every owned emitter's sprite
+  renderers given a material, local space on, a compile requested) and `DescribeSystem`; the parent's
+  `Scripts/configure_weather.py` duplicates the Spruce pack's `NS_Rain` / `NS_Snow` into `Content/NS_WeatherRain` /
+  `NS_WeatherSnow` (tracked; the pack untouched), makes `RT_WeatherOcclusion` and `M_WeatherPrecipitation` (unlit
+  translucent: a streak from the sprite's UV, the particle colour, the fade, the occlusion) and calls the library.
+- **The providers.** VoxelWorldPOI's `UPOIWeatherBridge` sets itself as both providers once the chunk manager is up: the
+  climate from `UVoxelChunkManager::GetClimateAt` (the biome's three fields, mapped from about [-1, 1] to 0..1), the
+  altitude, the up, under the sea; shelter 0 inside a stamped dungeon's bounds and inside a claim tagged `Claim.Shelter`.
+  `ww.Weather` names both providers and prints the climate where the pawn stands.
 
 ## Rules
 - Never read the authority's `Sync` on a client: every reader goes through `FindSync()` / the public getters, which
@@ -95,13 +126,18 @@
 - A change to the schedule, the blend, the accumulators or the resolution changes what every machine computes: keep the
   functions pure in `UWorldWeatherMath` and the tests on them.
 - Tests: `WorldWeather.*` (EditorContext | EngineFilter): `Math.Blend`, `Math.Schedule`, `Math.PrecipitationType`,
-  `Math.WindVector`, `Math.Accumulators`, `Math.Lightning`, `Sync.Resolve` (pure); `Subsystem.Defaults` (a game world
-  without a provider: the defaults, SetWeather, the blend, the schedule, the lock, the export round trip, the wind).
+  `Math.WindVector`, `Math.Accumulators`, `Math.Lightning`, `Math.Occlusion`, `Sync.Resolve` (pure); `Subsystem.Defaults`
+  (a game world without a provider: the defaults, SetWeather, the blend, the schedule, the lock, the export round trip,
+  the wind), `Viewer.Precipitation` (the component's capture setup, inactive without a system, inactive when nothing
+  falls). The capture's rendering and the material's occlusion are seen in PIE (`Scripts/qa/weather_shots.py --roof`),
+  not tested headless.
 
 ## Console
 - `ww.Weather` (the present preset and blend, the front, the sky controller and viewers and the sky-write cost, the
-  accumulators, the next draw, the conditions where the pawn stands), `ww.Set <Preset|Weather.Preset.X> [BlendSeconds]` (authority; no argument lists the presets), `ww.Lock 0|1`,
-  `ww.Wind <Azimuth> <Speed>`, `ww.Strike [Distance]` (this machine), `ww.Next`; the cvar `ww.Viewer.Fog 0|1`
-  (`WorldWeatherViewer.cpp`). Registered in `WorldWeatherConsole.cpp`;
+  accumulators, the next draw, the conditions where the pawn stands, the providers and the climate there, each viewer's
+  precipitation and captures), `ww.Set <Preset|Weather.Preset.X> [BlendSeconds]` (authority; no argument lists the presets), `ww.Lock 0|1`,
+  `ww.Wind <Azimuth> <Speed>`, `ww.Strike [Distance]` (this machine), `ww.Next`; the cvars `ww.Viewer.Fog 0|1`
+  (`WorldWeatherViewer.cpp`), `ww.Viewer.Precipitation 0|1`, `ww.Viewer.Occlusion 0|1`, `ww.Occlusion.Frames N`
+  (`WorldWeatherPrecipitationComponent.cpp`). Registered in `WorldWeatherConsole.cpp`;
   the game module's `vox.Weather` and `vox.Wind` run `ww.Weather` and `ww.Wind`. All of them:
   `Documentation/EDITOR_CONSOLE_GUIDE.md` §7 (project root).

@@ -4,13 +4,17 @@
 #include "Misc/AutomationTest.h"
 
 #include "WorldWeatherMath.h"
+#include "WorldWeatherPrecipitationComponent.h"
 #include "WorldWeatherPreset.h"
 #include "WorldWeatherSettings.h"
 #include "WorldWeatherSubsystem.h"
 #include "WorldWeatherTags.h"
 #include "WorldWeatherTypes.h"
+#include "WorldWeatherViewer.h"
+#include "Components/SceneCaptureComponent2D.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "NiagaraComponent.h"
 #include "WorldClockSubsystem.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -460,6 +464,110 @@ bool FWorldWeatherSubsystemDefaultsTest::RunTest(const FString& Parameters)
 		Weather->SetWind(270.0f, 400.0f);
 		const FWorldWeatherSyncPoint Wind = Weather->GetSyncPoint();
 		TestTrue(TEXT("SetWind: the front's wind"), Wind.ToFront.WindAzimuth == 270.0f && Wind.ToFront.WindSpeed == 400.0f && Wind.ToTag == Back.ToTag);
+	}
+	GEngine->DestroyWorldContext(World);
+	World->DestroyWorld(false);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The occlusion capture's frame (P2, D63): the capture sits above the view along the up and looks down it; a point
+// under the origin is the texture's centre at the capture's height; east is -U, north is -V; the same on a planet's up.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldWeatherOcclusionFrameTest, "WorldWeather.Math.Occlusion", WORLDWEATHER_TEST_FLAGS)
+bool FWorldWeatherOcclusionFrameTest::RunTest(const FString& Parameters)
+{
+	// A plane: up +Z, north +Y, east +X.
+	{
+		const FVector View(1000.0, 2000.0, 300.0);
+		FVector Origin, Forward, U, V, CameraUp;
+		UWorldWeatherMath::OcclusionFrame(View, FVector::UpVector, 5000.0f, 10000.0f, Origin, Forward, U, V, CameraUp);
+		TestTrue(TEXT("The origin is the height above the view"), Origin.Equals(View + FVector(0.0, 0.0, 5000.0)));
+		TestTrue(TEXT("Forward is down"), Forward.Equals(-FVector::UpVector));
+		TestTrue(TEXT("The camera's up is north"), CameraUp.Equals(FVector::RightVector));
+		FVector2D UV;
+		float Depth = 0.0f;
+		UWorldWeatherMath::OcclusionCoords(View, Origin, Forward, U, V, UV, Depth);
+		TestTrue(TEXT("The view is the centre"), UV.Equals(FVector2D(0.5, 0.5), 1.0e-6));
+		TestEqual(TEXT("... at the capture's height"), Depth, 5000.0f);
+		UWorldWeatherMath::OcclusionCoords(View + FVector(10000.0, 0.0, -1000.0), Origin, Forward, U, V, UV, Depth);
+		TestTrue(TEXT("The east edge is U 0 (the capture's right is west)"), UV.Equals(FVector2D(0.0, 0.5), 1.0e-6));
+		TestEqual(TEXT("A point 1,000 under the view is 1,000 deeper"), Depth, 6000.0f);
+		UWorldWeatherMath::OcclusionCoords(View + FVector(0.0, -10000.0, 0.0), Origin, Forward, U, V, UV, Depth);
+		TestTrue(TEXT("The south edge is V 1 (down the texture)"), UV.Equals(FVector2D(0.5, 1.0), 1.0e-6));
+		UWorldWeatherMath::OcclusionCoords(View + FVector(-5000.0, 5000.0, 0.0), Origin, Forward, U, V, UV, Depth);
+		TestTrue(TEXT("North-west is the upper right quarter"), UV.Equals(FVector2D(0.75, 0.25), 1.0e-6));
+	}
+	// A planet: a radial up; the frame follows it, the point under the view is still the centre at the height.
+	{
+		const FVector Up = FVector(0.3, -0.5, 0.8).GetSafeNormal();
+		const FVector View = Up * 250000.0;
+		FVector Origin, Forward, U, V, CameraUp;
+		UWorldWeatherMath::OcclusionFrame(View, Up, 4000.0f, 8000.0f, Origin, Forward, U, V, CameraUp);
+		TestTrue(TEXT("Forward is the planet's down"), Forward.Equals(-Up, 1.0e-6));
+		TestTrue(TEXT("The camera's up is tangent"), FMath::IsNearlyZero(FVector::DotProduct(CameraUp, Up), 1.0e-6) && CameraUp.Z > 0.0);
+		TestTrue(TEXT("U and V are tangent"), FMath::IsNearlyZero(FVector::DotProduct(U, Up), 1.0e-9) && FMath::IsNearlyZero(FVector::DotProduct(V, Up), 1.0e-9));
+		TestTrue(TEXT("U and V are orthogonal"), FMath::IsNearlyZero(FVector::DotProduct(U, V), 1.0e-12));
+		TestTrue(TEXT("U and V span the width"), FMath::IsNearlyEqual(U.Size() * 16000.0, 1.0, 1.0e-6) && FMath::IsNearlyEqual(V.Size() * 16000.0, 1.0, 1.0e-6));
+		FVector2D UV;
+		float Depth = 0.0f;
+		UWorldWeatherMath::OcclusionCoords(View - Up * 700.0, Origin, Forward, U, V, UV, Depth);
+		TestTrue(TEXT("Under the view: the centre"), UV.Equals(FVector2D(0.5, 0.5), 1.0e-6));
+		TestEqual(TEXT("... 700 deeper than the height"), Depth, 4700.0f, 1.0e-2f);
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The viewer's precipitation component in a game world (P2): the capture is orthographic scene depth that never captures
+// by itself; with no systems named it stays inactive at any rate; the settings' systems are what it draws.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldWeatherPrecipitationSetupTest, "WorldWeather.Viewer.Precipitation", WORLDWEATHER_TEST_FLAGS)
+bool FWorldWeatherPrecipitationSetupTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("WorldWeatherPrecipitationTest"));
+	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+	Context.SetCurrentWorld(World);
+	AWorldWeatherViewer* Viewer = World->SpawnActor<AWorldWeatherViewer>();
+	if (TestNotNull(TEXT("A viewer spawns"), Viewer) && TestNotNull(TEXT("... with a precipitation component"), Viewer->Precipitation.Get()))
+	{
+		UWorldWeatherPrecipitationComponent* P = Viewer->Precipitation;
+		TestNotNull(TEXT("The particles"), P->Particles.Get());
+		if (TestNotNull(TEXT("The capture"), P->Occlusion.Get()))
+		{
+			TestTrue(TEXT("Orthographic"), P->Occlusion->ProjectionType == ECameraProjectionMode::Orthographic);
+			TestTrue(TEXT("Scene depth"), P->Occlusion->CaptureSource == SCS_SceneDepth);
+			TestFalse(TEXT("Never every frame"), P->Occlusion->bCaptureEveryFrame);
+			TestFalse(TEXT("Never on movement"), P->Occlusion->bCaptureOnMovement);
+			TestFalse(TEXT("No lighting"), P->Occlusion->ShowFlags.Lighting);
+			TestFalse(TEXT("No particles (rain must not occlude rain)"), P->Occlusion->ShowFlags.Particles);
+			TestFalse(TEXT("No translucency"), P->Occlusion->ShowFlags.Translucency);
+		}
+		TestTrue(TEXT("Inactive at start"), P->GetActiveType() == EWorldWeatherPrecipitation::None);
+		// A rainy condition with no system named in the settings (the test environment): still inactive, no capture, rate 0.
+		FWorldWeatherConditions C;
+		C.PrecipitationType = EWorldWeatherPrecipitation::Rain;
+		C.PrecipitationRate = 0.8f;
+		C.Exposure = 1.0f;
+		C.Up = FVector::UpVector;
+		P->UpdateWeather(C, FVector(100.0, 200.0, 300.0), 0.016f);
+		const bool bHasRain = !UWorldWeatherSettings::Get()->RainSystem.IsNull() && UWorldWeatherSettings::Get()->RainSystem.IsValid();
+		if (!bHasRain)
+		{
+			TestTrue(TEXT("No rain system: inactive"), P->GetActiveType() == EWorldWeatherPrecipitation::None);
+			TestEqual(TEXT("No rain system: rate 0"), P->GetActiveRate(), 0.0f);
+			TestFalse(TEXT("No rain system: no capture"), P->IsOcclusionCapturing());
+		}
+		else
+		{
+			AddInfo(TEXT("A rain system is configured: the component activates it"));
+			TestTrue(TEXT("Rain active"), P->GetActiveType() == EWorldWeatherPrecipitation::Rain);
+		}
+		C.PrecipitationType = EWorldWeatherPrecipitation::None;
+		C.PrecipitationRate = 0.0f;
+		P->UpdateWeather(C, FVector(100.0, 200.0, 300.0), 0.016f);
+		TestTrue(TEXT("Nothing falling: inactive"), P->GetActiveType() == EWorldWeatherPrecipitation::None);
+		TestEqual(TEXT("Nothing falling: rate 0"), P->GetActiveRate(), 0.0f);
 	}
 	GEngine->DestroyWorldContext(World);
 	World->DestroyWorld(false);

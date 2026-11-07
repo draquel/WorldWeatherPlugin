@@ -27,6 +27,10 @@ public class WorldWeather : ModuleRules
 				// The timeline runs on the world clock's synchronised seconds (the plan's D59).
 				"WorldClock",
 				"NetCore",
+				// The viewer's precipitation: a Niagara system per type, its user parameters set from the conditions (P2).
+				"Niagara",
+				// The GPU frame time ww.Weather prints (RHIGetGPUFrameCycles): the viewer effects' A/B.
+				"RHI",
 			}
 		);
 	}

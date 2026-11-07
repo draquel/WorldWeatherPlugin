@@ -2,6 +2,7 @@
 
 #include "WorldWeatherViewer.h"
 #include "WorldWeather.h"
+#include "WorldWeatherPrecipitationComponent.h"
 #include "WorldWeatherSettings.h"
 #include "WorldWeatherSubsystem.h"
 
@@ -30,6 +31,9 @@ AWorldWeatherViewer::AWorldWeatherViewer()
 	// Starts clear: the radial density is the weather's fog, written every tick; no height fog in the volume (the sphere does it).
 	LocalFog->RadialFogExtinction = 0.0f;
 	LocalFog->HeightFogExtinction = 0.0f;
+
+	Precipitation = CreateDefaultSubobject<UWorldWeatherPrecipitationComponent>(TEXT("Precipitation"));
+	Precipitation->SetupAttachment(Root);
 }
 
 void AWorldWeatherViewer::SetPlayer(APlayerController* InPlayer)
@@ -85,5 +89,13 @@ void AWorldWeatherViewer::Tick(float DeltaSeconds)
 		LocalFog->SetRelativeScale3D(FVector(Scale));
 		LocalFog->SetFogAlbedo(Settings->LocalFogAlbedo);
 		LocalFog->SetFogPhaseG(Settings->LocalFogPhaseG);
+	}
+
+	// The precipitation (P2): what the weather is at the camera (this actor is the requester: its exposure is cached, it is
+	// ignored by the shelter trace).
+	ViewConditions = Weather->GetConditionsAt(View, this);
+	if (Precipitation)
+	{
+		Precipitation->UpdateWeather(ViewConditions, View, DeltaSeconds);
 	}
 }
