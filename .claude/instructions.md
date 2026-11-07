@@ -76,10 +76,13 @@
   other collection (VoxelWorlds' wind inputs in P3, a pack's own wind collection) with no edit to its owner.
 - **The viewer** (`AWorldWeatherViewer`, transient, not replicated): one per local player controller
   (`bAutoSpawnViewers`; none on a dedicated server), following the player's camera in `TG_PostUpdateWork`, carrying a
-  `ULocalFogVolumeComponent` of radius `LocalFogRadius` whose radial extinction is the front's fog times
-  `LocalFogExtinctionMax` (meant as the weather's fog everywhere, on a planet too where the height fog is hidden); the cvar
-  `ww.Viewer.Fog 0` is the A/B. **It renders nothing yet**: local fog volumes draw nothing in this project, the engine's own
-  actor included (G134); the component stays so a fix lights it. Later phases add precipitation, ambience, the lens and lightning to it.
+  `ULocalFogVolumeComponent` of radius `LocalFogRadius`: the weather's fog everywhere, on a planet too where the height
+  fog is hidden. The front's fog times `LocalFogExtinctionMax` (per metre; 0.02 is about 50 m of visibility) is the
+  volume's **height** extinction, uniform across the sphere at the lowest falloff (1), and its radial extinction is a
+  constant 100, the sphere's soft edge: the engine combines the two densities as coverages, `T = 1 - (1 - TR)(1 - TH)`
+  (`LocalFogVolumeCommon.ush`), so a radial-only volume draws nothing (G134, closed 2026-11-07: the viewer had zeroed
+  the height term). Both are 0 when the front has no fog. The cvar `ww.Viewer.Fog 0` is the A/B. Later phases add
+  ambience, the lens and lightning to it.
 - **The flash.** `Strike` (the scheduled minute's or `ww.Strike`) sets `FlashRemaining` to `LightningFlashSeconds`;
   `GetLightningFlash` fades it to 0, into the slot and the collection.
 - **The cost.** The slot, the collection and the mirror writes: 0.02 ms a tick on `VoxelDemo` (`ww.Weather` prints the

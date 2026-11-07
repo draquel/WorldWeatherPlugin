@@ -12,6 +12,10 @@
 #include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
 
+// The local fog volume's radial extinction while the weather has any fog: dense, so the radial coverage is 1 but for the
+// outer few percent of the radius, where it fades the sphere's edge (the height term is the fog itself; see Tick).
+static constexpr float LocalFogEdgeExtinction = 100.0f;
+
 static TAutoConsoleVariable<int32> CVarWorldWeatherViewerFog(
 	TEXT("ww.Viewer.Fog"), 1,
 	TEXT("The weather's local fog volume about each local player's camera (1 on, 0 off: A/B)"),
@@ -28,9 +32,12 @@ AWorldWeatherViewer::AWorldWeatherViewer()
 
 	LocalFog = CreateDefaultSubobject<ULocalFogVolumeComponent>(TEXT("LocalFog"));
 	LocalFog->SetupAttachment(Root);
-	// Starts clear: the radial density is the weather's fog, written every tick; no height fog in the volume (the sphere does it).
+	// Starts clear; the tick writes the weather's density into the height term and the edge into the radial one (see Tick).
+	// The lowest falloff keeps the height density within a percent across the sphere, so it is uniform about the camera.
 	LocalFog->RadialFogExtinction = 0.0f;
 	LocalFog->HeightFogExtinction = 0.0f;
+	LocalFog->HeightFogFalloff = 1.0f;
+	LocalFog->HeightFogOffset = 0.0f;
 
 	Precipitation = CreateDefaultSubobject<UWorldWeatherPrecipitationComponent>(TEXT("Precipitation"));
 	Precipitation->SetupAttachment(Root);
@@ -76,11 +83,15 @@ void AWorldWeatherViewer::Tick(float DeltaSeconds)
 	{
 		return;
 	}
-	// The fog about the camera: the front's fog density as the volume's radial extinction, the sphere the settings' radius.
+	// The fog about the camera, the sphere the settings' radius. The engine combines the volume's two densities as
+	// coverages, T = 1 - (1 - TR) * (1 - TH) (LocalFogVolumeCommon.ush), so a radial-only volume draws nothing (G134):
+	// the height term carries the weather's density, per metre and uniform across the sphere (falloff 1), and the radial
+	// term, dense, is only the sphere's soft edge. Both at 0 when clear: the renderer then skips the instance.
 	const float Fog = CVarWorldWeatherViewerFog.GetValueOnGameThread() != 0 ? Weather->GetCurrentFront().FogDensity * Settings->LocalFogExtinctionMax : 0.0f;
 	if (Fog != LastFogExtinction)
 	{
-		LocalFog->SetRadialFogExtinction(Fog);
+		LocalFog->SetHeightFogExtinction(Fog);
+		LocalFog->SetRadialFogExtinction(Fog > 0.0f ? LocalFogEdgeExtinction : 0.0f);
 		LastFogExtinction = Fog;
 	}
 	const float Scale = FMath::Max(Settings->LocalFogRadius, 500.0f) / ULocalFogVolumeComponent::GetBaseVolumeSize();

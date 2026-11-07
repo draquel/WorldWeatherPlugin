@@ -279,9 +279,12 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Viewer", meta = (ClampMin = "500"))
 	float LocalFogRadius = 30000.0f;
 
-	/** The local fog volume's radial density at a full weather fog (the engine's extinction; 0 = none). */
+	/**
+	 * The local fog's extinction per metre at a full weather fog, uniform across the sphere (the volume's height term; its
+	 * radial term is only the edge): 0.02 is about 50 m of visibility, 0.005 a haze, 0 none.
+	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Viewer", meta = (ClampMin = "0"))
-	float LocalFogExtinctionMax = 0.25f;
+	float LocalFogExtinctionMax = 0.02f;
 
 	/** The local fog's albedo (its colour under light). */
 	UPROPERTY(Config, EditAnywhere, Category = "Viewer")
