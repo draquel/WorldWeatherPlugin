@@ -184,7 +184,7 @@ Both run inside the movement simulation, so the client's prediction and the serv
 both). Test `VoxelCharacter.Movement.WindPush`.
 
 The dedicated-server PIE test (`VoxelEngine.Replication.Framework`) gained a row: the server sets a storm, and the client
-reads the same sync point serial, preset and front within a sync interval. The hand-run QA plan gained an area, F11.
+reads the same sync point serial, preset and front within a sync interval. The hand-run QA plan gained an area, F12.
 
 ## 9. Results
 
@@ -258,7 +258,7 @@ components, its alpha a separate pin; and a biome's mid temperature is no guide 
 ### P4 (2026-11-07): the player
 
 The ambience, lens and lightning components of section 8, the character plugin's wind drift and wet grip, the
-dedicated-server test's `WeatherSync` step and QA area F11. Seen in PIE on `VoxelDemo`: under `ww.Wind 90 800` (756 uu/s
+dedicated-server test's `WeatherSync` step and QA area F12. Seen in PIE on `VoxelDemo`: under `ww.Wind 90 800` (756 uu/s
 at the pawn once the 30 s blend is through) a standing pawn drifts east at 75 to 93 uu/s, sampled each second over ten
 (`vox.Debug.Capture`'s speed 72 to 94), and not at all in a calm; under a Storm the rain loops play at 0.58 and 0.42
 (light and heavy, rate 0.72) with the wind loop at the storm's full, and inside the Tiled dungeon's entrance
@@ -277,4 +277,4 @@ with `CreateWorld` has no game mode, so nothing dispatches `BeginPlay` to its ac
 settings does, `EndPlay` on the world before the teardown); and a unity build merges two files' anonymous namespaces,
 so a helper copied into a second file is a redefinition (`UWorldWeatherSettings::LoadIfPresent` is the one copy now).
 The suite is 20/20 with the weather, clock and character movement roots; the in-editor gate 27/27 with the parity
-lines unchanged. The wet grip is not measured here (F11-08 is the hand-run row).
+lines unchanged. The wet grip is not measured here (F12-08 is the hand-run row).
