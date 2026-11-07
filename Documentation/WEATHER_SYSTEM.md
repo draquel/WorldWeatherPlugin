@@ -2,7 +2,7 @@
 
 > The reference document of WorldWeatherPlugin, with `.claude/instructions.md`. The design record is the parent
 > project's `Documentation/WEATHER_SYSTEM_PLAN.md` (the question, the survey, the architecture, D58-D66, P0-P6). Each
-> phase adds its results paragraph here.
+> phase adds its results paragraph here (section 6).
 
 ## 1. What it is
 
@@ -68,7 +68,28 @@ tangent plane, toward a planet's pole, +Y on a plane; east is north x up, the si
 (where the clock's sun rises), +X on a plane (the clock's default sunrise bearing). A front's wind azimuth is degrees
 from that north toward that east.
 
-## 5. Results
+## 5. The sky (P1)
+
+The clock controller stays the one writer of the sun, the sky light, the height fog and the clouds (D61): it gained a
+modifier slot, `FDayNightModifiers`, identity by default, that the weather fills every tick on every machine from the
+present front (`UWorldWeatherSubsystem::FillModifiers`, the settings' Sky section): the sun dimmed by the cloud cover
+and the precipitation (to `SunScaleMin`), the sky light by the cover, the height fog's density scaled by the weather fog
+and its colour tinted toward grey by the cover, the volumetric clouds' coverage and density parameters set between the
+settings' ranges, a lightning flash. The controller writes the cloud parameters through a dynamic instance of each
+layer's material, made on the first write, the authored values restored when nothing asks.
+
+The engine's cloud material does not take 0..1: its instance authors `Cloud_GlobalCoverage` -0.2 and
+`Cloud_GlobalDensity` 0.008. The ranges that read right on `VoxelDemo` are coverage -0.35 (a few fair-weather cumulus)
+to 0.3 (a closed ceiling) and density 0.006 to 0.12 (a dark ceiling); the defaults hold them.
+
+`MPC_Weather` holds the front and the local reading for materials (the scalars named in the instructions file, the wind
+direction as a vector), and the mirror table writes the same sources into other collections (D64): VoxelWorlds' wind
+inputs in P3, a pack's own collection with no edit to the pack.
+
+Each local player gets an `AWorldWeatherViewer` that follows the camera and carries a local fog volume (D62): the
+weather's fog about the viewer, on a planet too, where the clock hides the height fog; `ww.Viewer.Fog 0` turns it off.
+
+## 6. Results
 
 ### P0 (2026-11-06): the plugin and the core
 
@@ -76,3 +97,17 @@ The repository, the submodule, the module above, the seven default presets, the 
 state actor, the two provider interfaces, the six console commands, the eight tests. No effect yet: `ww.Weather` shows
 the front changing on the server and on a client. The default table lives in code (`FillDefaults`); P1's content script
 bakes it into an asset the settings name.
+
+### P1 (2026-11-06): the sky
+
+The modifier slot on the clock controller (WorldClockPlugin; `WorldClock.Lighting.Modifiers`), the subsystem's sky tick,
+`MPC_Weather` and the mirror table, the viewer actor with the local fog volume, `Scripts/configure_weather.py` (the
+collection and `DA_WeatherPresets` in the plugin's Content, named by `Config/DefaultGame.ini`), `Scripts/qa/weather_shots.py`
+(PIE at noon, the clock stopped, a shot per preset with the frame's luma and the sky-write cost; `--set` overrides the
+settings live for tuning). Seen on `VoxelDemo` with the camera at the pawn: Clear a blue sky with cumulus, Overcast a
+broken grey sky with the ground dimmer (luma 97 to 94 of 255), Storm a closed grey ceiling with haze and the ground
+at 92, Fog cumulus through a white haze (the height fog's density scale); a strike lifts the whole frame by 16. On `PlanetTest`
+from 30 degrees north a storm dims the ground (luma 138 to 115) but no fog shows: the local fog volume renders nothing in this
+project, in PIE or in the editor world, the engine's own actor included (G134, `Documentation/FINDINGS.md`); the viewer keeps
+its component so a fix lights it with no plugin change, and until then a planet has no weather fog. The sky, collection and
+mirror writes cost 0.013-0.032 ms a tick (0.02 average), under the plan's 0.05.

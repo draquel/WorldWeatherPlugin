@@ -10,7 +10,66 @@
 #include "WorldWeatherSettings.generated.h"
 
 class UCurveFloat;
+class UMaterialParameterCollection;
 class UWorldWeatherPresetTable;
+
+/** What a mirror table entry writes into a collection's parameter (the plan's D64). */
+UENUM(BlueprintType)
+enum class EWorldWeatherMirrorSource : uint8
+{
+	/** The front's cloud cover, 0..1 */
+	CloudCover,
+	/** The front's cloud density, 0..1 */
+	CloudDensity,
+	/** The front's precipitation rate, 0..1 */
+	Precipitation,
+	/** The front's fog density, 0..1 */
+	FogDensity,
+	/** The mean wind speed, uu/s */
+	WindSpeed,
+	/** The mean wind speed over StrongWindAbove, 0..1 */
+	WindIntensity,
+	/** The gust multiplier this frame (GustFactor) */
+	GustFactor,
+	/** The front's gustiness, 0..1 */
+	Gustiness,
+	/** The front's thunder rate */
+	ThunderRate,
+	/** The front's humidity, 0..1 */
+	Humidity,
+	/** The global wetness accumulator, 0..1 */
+	Wetness,
+	/** The global snow cover accumulator, 0..1 */
+	SnowCover,
+	/** Degrees C at the local viewer */
+	TemperatureC,
+	/** The lightning flash this frame, 0..1 */
+	LightningFlash,
+	/** A vector: the wind direction at the local viewer (unit, tangent to the up) with the speed in W */
+	WindDirection,
+};
+
+/** One parameter of one collection the weather writes every tick: Source x Scale + Offset (a vector source ignores both). */
+USTRUCT(BlueprintType)
+struct WORLDWEATHER_API FWorldWeatherMirrorEntry
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mirror")
+	TSoftObjectPtr<UMaterialParameterCollection> Collection;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mirror")
+	FName Parameter;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mirror")
+	EWorldWeatherMirrorSource Source = EWorldWeatherMirrorSource::WindIntensity;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mirror")
+	float Scale = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mirror")
+	float Offset = 0.0f;
+};
 
 /**
  * Weather configuration (Project Settings > Plugins > World Weather; DefaultGame.ini
@@ -133,7 +192,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Tags", meta = (ClampMin = "0"))
 	float CalmWindBelow = 150.0f;
 
-	/** Weather.Wind.Strong at or over this mean wind speed, uu/s (Breeze between). */
+	/** Weather.Wind.Strong at or over this mean wind speed, uu/s (Breeze between). Also WindIntensity's full scale. */
 	UPROPERTY(Config, EditAnywhere, Category = "Tags", meta = (ClampMin = "0"))
 	float StrongWindAbove = 600.0f;
 
@@ -146,6 +205,89 @@ public:
 	/** How far from the local viewer a strike lands, uu (the place is per machine; the time is the clock minute's hash). */
 	UPROPERTY(Config, EditAnywhere, Category = "Lightning", meta = (ClampMin = "0"))
 	float LightningRadius = 15000.0f;
+
+	/** Real seconds a strike's flash takes to fade from the sky (the clock controller's slot, MPC_Weather's LightningFlash). */
+	UPROPERTY(Config, EditAnywhere, Category = "Lightning", meta = (ClampMin = "0.01"))
+	float LightningFlashSeconds = 0.35f;
+
+	// --- The sky (the plan's D61: the clock controller's modifier slot, filled every tick on every machine) ---
+
+	/** Fill the clock controller's modifier slot from the front (the sun, the sky light, the height fog, the clouds, the flash). */
+	UPROPERTY(Config, EditAnywhere, Category = "Sky")
+	bool bDriveSky = true;
+
+	/** How much a full cloud cover dims the sun (the sun's scale = 1 - cover x this - precipitation x SunDimByPrecipitation, at least SunScaleMin). */
+	UPROPERTY(Config, EditAnywhere, Category = "Sky", meta = (ClampMin = "0", ClampMax = "1"))
+	float SunDimByCloudCover = 0.6f;
+
+	/** How much a full precipitation rate dims the sun further. */
+	UPROPERTY(Config, EditAnywhere, Category = "Sky", meta = (ClampMin = "0", ClampMax = "1"))
+	float SunDimByPrecipitation = 0.2f;
+
+	/** The least the sun is scaled to under any weather. */
+	UPROPERTY(Config, EditAnywhere, Category = "Sky", meta = (ClampMin = "0", ClampMax = "1"))
+	float SunScaleMin = 0.15f;
+
+	/** How much a full cloud cover dims the sky light. */
+	UPROPERTY(Config, EditAnywhere, Category = "Sky", meta = (ClampMin = "0", ClampMax = "1"))
+	float SkyLightDimByCloudCover = 0.35f;
+
+	/** The height fog's density scale at a full weather fog: 1 + fog x this (where a height fog exists and is shown). */
+	UPROPERTY(Config, EditAnywhere, Category = "Sky", meta = (ClampMin = "0"))
+	float FogDensityScaleByFog = 4.0f;
+
+	/** The height fog's tint under a full cloud cover (white under a clear sky, blended by the cover). */
+	UPROPERTY(Config, EditAnywhere, Category = "Sky")
+	FLinearColor FogTintOvercast = FLinearColor(0.72f, 0.75f, 0.8f);
+
+	/**
+	 * The clouds' coverage parameter at cloud cover 0 and 1. The engine's m_SimpleVolumetricCloud adds it to its weather map: its
+	 * instance authors -0.2 (scattered cumulus); -0.35 is a few fair-weather clouds, 0.3 a closed ceiling.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Sky", meta = (ClampMin = "-1", ClampMax = "1"))
+	float CloudCoverageMin = -0.35f;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Sky", meta = (ClampMin = "-1", ClampMax = "1"))
+	float CloudCoverageMax = 0.3f;
+
+	/** The clouds' density parameter at cloud density 0 and 1 (the engine instance authors 0.008; 0.06 is solid cumulus, 0.12 a dark ceiling). */
+	UPROPERTY(Config, EditAnywhere, Category = "Sky", meta = (ClampMin = "0", ClampMax = "1"))
+	float CloudDensityMin = 0.006f;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Sky", meta = (ClampMin = "0", ClampMax = "1"))
+	float CloudDensityMax = 0.12f;
+
+	// --- Collections (the plan's D64) ---
+
+	/** The weather's own collection, every parameter written each tick (MPC_Weather; the content script makes it). None: not written. */
+	UPROPERTY(Config, EditAnywhere, Category = "Collections")
+	TSoftObjectPtr<UMaterialParameterCollection> WeatherCollection;
+
+	/** Other collections' parameters the weather fills (VoxelWorlds' wind inputs, a pack's own wind collection). */
+	UPROPERTY(Config, EditAnywhere, Category = "Collections")
+	TArray<FWorldWeatherMirrorEntry> MirrorTable;
+
+	// --- The viewer (the plan's D62: a camera-following local fog volume per local player) ---
+
+	/** Spawn an AWorldWeatherViewer for every local player controller (none on a dedicated server). */
+	UPROPERTY(Config, EditAnywhere, Category = "Viewer")
+	bool bAutoSpawnViewers = true;
+
+	/** The local fog volume's radius about the camera, uu. */
+	UPROPERTY(Config, EditAnywhere, Category = "Viewer", meta = (ClampMin = "500"))
+	float LocalFogRadius = 30000.0f;
+
+	/** The local fog volume's radial density at a full weather fog (the engine's extinction; 0 = none). */
+	UPROPERTY(Config, EditAnywhere, Category = "Viewer", meta = (ClampMin = "0"))
+	float LocalFogExtinctionMax = 0.25f;
+
+	/** The local fog's albedo (its colour under light). */
+	UPROPERTY(Config, EditAnywhere, Category = "Viewer")
+	FLinearColor LocalFogAlbedo = FLinearColor(0.8f, 0.84f, 0.9f);
+
+	/** The local fog's scattering distribution (0 even, toward 1 forward toward the sun). */
+	UPROPERTY(Config, EditAnywhere, Category = "Viewer", meta = (ClampMin = "0", ClampMax = "0.99"))
+	float LocalFogPhaseG = 0.3f;
 
 	/** The rules the pure resolution uses, from the values above. */
 	FWorldWeatherRules MakeRules() const;
