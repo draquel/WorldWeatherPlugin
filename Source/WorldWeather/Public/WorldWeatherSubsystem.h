@@ -144,6 +144,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "WorldWeather|Sky")
 	void GetSkyWriteCost(float& OutLastMs, float& OutAverageMs) const { OutLastMs = SkyWriteLastMs; OutAverageMs = SkyWriteAverageMs; }
 
+	/** The GPU frame time (the RHI's, what stat unit shows) averaged over the last second, ms: the A/B of the viewer's effects. */
+	UFUNCTION(BlueprintPure, Category = "WorldWeather|Sky")
+	float GetGPUFrameAverageMs() const { return GPUFrameAverageMs; }
+
 	// --- Writing (authority) ---
 
 	/**
@@ -275,6 +279,8 @@ protected:
 	double SkyWriteWindowStart = 0.0;
 	double SkyWriteWindowSum = 0.0;
 	int32 SkyWriteWindowCount = 0;
+	double GPUFrameWindowSum = 0.0;
+	float GPUFrameAverageMs = 0.0f;
 
 	struct FExposureCacheEntry
 	{

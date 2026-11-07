@@ -5,9 +5,11 @@
 
 #include "WorldWeather.h"
 #include "WorldWeatherMath.h"
+#include "WorldWeatherPrecipitationComponent.h"
 #include "WorldWeatherPreset.h"
 #include "WorldWeatherSubsystem.h"
 #include "WorldWeatherTags.h"
+#include "WorldWeatherViewer.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
@@ -82,8 +84,8 @@ namespace WorldWeatherConsole
 		UE_LOG(LogWorldWeather, Display, TEXT("ww.Weather: front %s"), *FrontText(Weather->GetCurrentFront()));
 		float LastMs = 0.0f, AverageMs = 0.0f;
 		Weather->GetSkyWriteCost(LastMs, AverageMs);
-		UE_LOG(LogWorldWeather, Display, TEXT("ww.Weather: sky controller %s, %d viewer(s), flash %.2f; the sky, collection and mirror writes %.3f ms last tick, %.3f ms average"),
-			Weather->GetSkyController() ? TEXT("driven") : TEXT("none"), Weather->GetViewers().Num(), Weather->GetLightningFlash(), LastMs, AverageMs);
+		UE_LOG(LogWorldWeather, Display, TEXT("ww.Weather: sky controller %s, %d viewer(s), flash %.2f; the sky, collection and mirror writes %.3f ms last tick, %.3f ms average; GPU frame %.2f ms average"),
+			Weather->GetSkyController() ? TEXT("driven") : TEXT("none"), Weather->GetViewers().Num(), Weather->GetLightningFlash(), LastMs, AverageMs, Weather->GetGPUFrameAverageMs());
 		if (Sync.IsValid())
 		{
 			UE_LOG(LogWorldWeather, Display, TEXT("ww.Weather: blend %.0f s from clock %.0f s, hold %.0f s (next draw at %.0f s)"), Sync.BlendSeconds, Sync.StartSeconds,
@@ -95,6 +97,21 @@ namespace WorldWeatherConsole
 		UE_LOG(LogWorldWeather, Display, TEXT("ww.Weather: at %s (%s): %s rate %.2f, %.1f C, wind %s (%.0f uu/s), wetness %.2f snow %.2f exposure %.2f; tags %s"),
 			*Here.ToCompactString(), Pawn ? TEXT("the pawn") : TEXT("the origin"), *UEnum::GetValueAsString(C.PrecipitationType), C.PrecipitationRate, C.TemperatureC,
 			*C.WindVector.ToCompactString(), C.WindVector.Size(), C.Wetness, C.SnowCover, C.Exposure, *C.Tags.ToStringSimple());
+		const FWorldWeatherClimateSample Climate = Weather->GetClimateAt(Here);
+		UE_LOG(LogWorldWeather, Display, TEXT("ww.Weather: climate provider %s, shelter provider %s; climate here T %.2f M %.2f altitude %.0f up %s%s"),
+			Weather->GetClimateProvider() ? *Weather->GetClimateProvider().GetObject()->GetClass()->GetName() : TEXT("none (the defaults)"),
+			Weather->GetShelterProvider() ? *Weather->GetShelterProvider().GetObject()->GetClass()->GetName() : TEXT("none (the trace)"),
+			Climate.Temperature, Climate.Moisture, Climate.Altitude, *Climate.Up.ToCompactString(), Climate.bUnderwater ? TEXT(", under water") : TEXT(""));
+		for (const AWorldWeatherViewer* V : Weather->GetViewers())
+		{
+			const UWorldWeatherPrecipitationComponent* P = V ? V->Precipitation : nullptr;
+			if (P)
+			{
+				UE_LOG(LogWorldWeather, Display, TEXT("ww.Weather: viewer %s: precipitation %s rate %.2f (at the view: %s rate %.2f exposure %.2f), occlusion %s, %d captures"),
+					*V->GetName(), *UEnum::GetValueAsString(P->GetActiveType()), P->GetActiveRate(), *UEnum::GetValueAsString(V->GetViewConditions().PrecipitationType),
+					V->GetViewConditions().PrecipitationRate, V->GetViewConditions().Exposure, P->IsOcclusionCapturing() ? TEXT("capturing") : TEXT("off"), P->GetCaptureCount());
+			}
+		}
 	}
 
 	void Set(const TArray<FString>& Args, UWorld* InWorld)

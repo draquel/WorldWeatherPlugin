@@ -23,7 +23,10 @@ interfaces a game sets, so the plugin stays engine-only.
 | `UWorldWeatherMath` | Pure: the blend, the schedule, the precipitation type, the local frame and the wind, the accumulators, the lightning schedule, the resolution |
 | `UWorldWeatherPresetTable` | The fronts a world can have, with hold and blend times and climate affinities; seven defaults built in memory when no asset is named |
 | `UWorldWeatherSettings` | The table, the seed, the temperature map, the thresholds, the rates, the shelter trace, the lightning radius |
-| `IWorldWeatherClimateProvider`, `IWorldWeatherShelterProvider` | What is world-specific: the climate and frame at a place, the seed; shelter a trace cannot see |
+| `IWorldWeatherClimateProvider`, `IWorldWeatherShelterProvider` | What is world-specific: the climate and frame at a place, the seed; shelter a trace cannot see (VoxelWorldPOI's `UPOIWeatherBridge` implements both) |
+| `AWorldWeatherViewer` | Per local player, following the camera: the local fog volume (P1), the precipitation component (P2) |
+| `UWorldWeatherPrecipitationComponent` | The particles (a Niagara system per type) and the occlusion capture (an orthographic depth capture into `RT_WeatherOcclusion`) |
+| `WorldWeatherEditor` (module), `UWorldWeatherContentLibrary` | Editor only: builds the precipitation systems from a pack's (the sprite material, local space) for the content script |
 | `WorldWeatherTags.h` | `Weather.*`: the presets, the precipitation type and intensity, storm, fog, the wind band, sheltered |
 | `ww.*` | The console: `ww.Weather`, `ww.Set`, `ww.Lock`, `ww.Wind`, `ww.Strike`, `ww.Next` |
 
@@ -89,7 +92,39 @@ inputs in P3, a pack's own collection with no edit to the pack.
 Each local player gets an `AWorldWeatherViewer` that follows the camera and carries a local fog volume (D62): the
 weather's fog about the viewer, on a planet too, where the clock hides the height fog; `ww.Viewer.Fog 0` turns it off.
 
-## 6. Results
+## 6. Climate, shelter and precipitation (P2)
+
+The climate and the shelter come in through VoxelWorldPOI's `UPOIWeatherBridge` (D60): once the chunk manager and the
+weather exist it sets itself as both providers. The climate at a place is VoxelWorlds' `UVoxelChunkManager::GetClimateAt`
+(the biome's three fields, shaped by the latitude and the lapse rate as generation shapes them), the temperature and
+moisture mapped from about [-1, 1] to 0..1, the altitude, the local up, under the sea; the world seed folds into the
+schedule. The shelter: exposure 0 inside a stamped dungeon's bounds and inside a claim tagged `Claim.Shelter`; anywhere
+else the trace cone. So one front is rain at a planet's equator and snow at its poles and on its peaks, and the
+schedule draws Snow where the reference point is cold.
+
+The precipitation (D63) is the viewer's `UWorldWeatherPrecipitationComponent`, fed `GetConditionsAt(camera)` every tick:
+the settings' `RainSystem` (rain and sleet) or `SnowSystem` (snow) activated while the rate at the view is over
+`PrecipitationActivateAbove`, deactivated (the particles dying out) otherwise; the component rotated so its local -Z is
+the fall direction `-up x FallSpeed + wind` (the systems are local-space, so the box and the velocities lean with it);
+`User.Rate`, `User.Wind`, `User.Up` set when a system exposes them. The material fades with `MPC_Weather.LocalPrecipitation`.
+
+The occlusion: an orthographic scene-depth capture `OcclusionHeight` above the camera, looking down the local up over
+`2 x OcclusionExtent`, every `OcclusionFrames` frames into `RT_WeatherOcclusion` (lighting, fog, post-processing,
+translucency and particles off; the ortho planes manual, 0 to the world's far). Its frame goes into the collection
+(`OcclusionOrigin`, `OcclusionU`, `OcclusionV`, `OcclusionForward`; `UWorldWeatherMath::OcclusionFrame`), and the
+precipitation material computes each pixel's capture UV and depth (`OcclusionCoords`' sums in a Custom node) and hides
+it under the captured depth: dry under a roof, a canopy, a cave's ceiling, with no geometry knowledge; the trace cone
+stays the gameplay exposure. With the capture off (`ww.Viewer.Occlusion 0`, or no target named) the particles fade with
+the viewer's traced exposure instead.
+
+The content: the editor's Python reaches no Niagara emitter or renderer, so the plugin's editor module
+(`UWorldWeatherContentLibrary::BuildPrecipitationSystem`) gives a duplicated system's sprite renderers the material and
+sets its emitters to local space; `Scripts/configure_weather.py` duplicates the Spruce pack's `NS_Rain` and `NS_Snow`
+into the plugin's Content as `NS_WeatherRain` and `NS_WeatherSnow` (tracked; the pack untouched), makes the render
+target and `M_WeatherPrecipitation` (unlit translucent: a streak from the sprite's UV, the particle colour, the fade,
+the occlusion), and calls the library.
+
+## 7. Results
 
 ### P0 (2026-11-06): the plugin and the core
 
@@ -111,3 +146,18 @@ from 30 degrees north a storm dims the ground (luma 138 to 115) but no fog shows
 project, in PIE or in the editor world, the engine's own actor included (G134, `Documentation/FINDINGS.md`); the viewer keeps
 its component so a fix lights it with no plugin change, and until then a planet has no weather fog. The sky, collection and
 mirror writes cost 0.013-0.032 ms a tick (0.02 average), under the plan's 0.05.
+
+### P2 (2026-11-06): climate, shelter and precipitation
+
+VoxelWorlds' `GetClimateAt` (its PR), VoxelWorldPOI's `UPOIWeatherBridge` and the precipitation above. Seen in PIE
+(`Scripts/qa/weather_shots.py`, the survey camera now in the local frame): on `VoxelDemo` the bridge answers
+(`ww.Weather`: climate provider `POIWeatherBridge`, T 0.52 M 0.47 at the spawn), Rain draws rain at 5.6 C, Storm heavier
+rain, the Snow preset sleet at 0.6 C (the rain system); the streaks fall over the lake and the open ground and are cut
+against the hillside and under the spruce canopy (the capture's depth; `ww.Viewer.Occlusion 0` draws them everywhere).
+Inside a stamped dungeon (`vox.TPRoom Entrance`) the bridge gives exposure 0 and the capture, looking down through the
+ground, hides every particle. On `SmoothTerrain_Planet` the same Storm is rain at 20 N (21.5 C, the streaks along the
+radial up, clipped at the grass with the capture on, whole with it off) and snow at 78 N (-8.8 C). The GPU frame on
+`VoxelDemo` under the storm (1280 x 722): 5.20 ms with the particles off, 5.36 with the particles and no capture, 5.61 with
+the capture every 4 frames (the default), 6.00 every frame: about 0.4 ms for both at the defaults, under the plan's 0.5.
+The pack's emitters simulate on the CPU (`DescribeSystem`); a GPU emitter is a content change for later. The capture
+runs the full renderer at 512 px for a depth: its cost is the renderer's, not the resolution's.

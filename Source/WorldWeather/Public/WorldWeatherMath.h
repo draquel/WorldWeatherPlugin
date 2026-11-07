@@ -115,6 +115,29 @@ public:
 	 */
 	static void LocalFrame(const FVector& Up, FVector& OutNorth, FVector& OutEast);
 
+	/**
+	 * The precipitation occlusion capture's frame about a view (the plan's D63): the capture sits OcclusionHeight above the
+	 * view along the local up and looks down it, its texture's U along the capture's right (-east) and V along its down
+	 * (-north), each over the capture's width (2 x extent). A pixel's capture coordinates: UV = 0.5 + ((P - Origin) . U,
+	 * (P - Origin) . V); its depth along the capture: (P - Origin) . Forward. The precipitation material does the same sums
+	 * from MPC_Weather's OcclusionOrigin / OcclusionU / OcclusionV / OcclusionForward.
+	 * @param View The camera
+	 * @param Up The local up
+	 * @param Height How far above the view the capture sits
+	 * @param Extent Half the capture's width
+	 * @param OutOrigin The capture's position
+	 * @param OutForward The capture's look direction (-Up)
+	 * @param OutU The texture's U axis per world unit (the right / the width)
+	 * @param OutV The texture's V axis per world unit (the down / the width)
+	 * @param OutCameraUp The capture's up (north): the component's Z axis
+	 */
+	static void OcclusionFrame(const FVector& View, const FVector& Up, float Height, float Extent,
+		FVector& OutOrigin, FVector& OutForward, FVector& OutU, FVector& OutV, FVector& OutCameraUp);
+
+	/** A point's capture coordinates (UV in 0..1 inside the capture) and depth along the capture, from OcclusionFrame's. */
+	static void OcclusionCoords(const FVector& Point, const FVector& Origin, const FVector& Forward, const FVector& U, const FVector& V,
+		FVector2D& OutUV, float& OutDepth);
+
 	/** The gust multiplier at a clock time: two slow sines; 1 for no gustiness, within 1 +- Gustiness. */
 	UFUNCTION(BlueprintPure, Category = "WorldWeather|Math")
 	static float GustFactor(double Seconds, float Gustiness);
