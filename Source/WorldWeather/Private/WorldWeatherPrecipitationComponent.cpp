@@ -12,7 +12,6 @@
 #include "HAL/IConsoleManager.h"
 #include "Kismet/KismetMaterialLibrary.h"
 #include "Materials/MaterialParameterCollection.h"
-#include "Misc/PackageName.h"
 #include "NiagaraComponent.h"
 #include "NiagaraSystem.h"
 
@@ -34,15 +33,6 @@ static TAutoConsoleVariable<int32> CVarWorldWeatherOcclusionFrames(
 const FName UWorldWeatherPrecipitationComponent::RateParameter(TEXT("User.Rate"));
 const FName UWorldWeatherPrecipitationComponent::WindParameter(TEXT("User.Wind"));
 const FName UWorldWeatherPrecipitationComponent::UpParameter(TEXT("User.Up"));
-
-namespace
-{
-	UObject* LoadIfPresent(const FSoftObjectPath& Path)
-	{
-		// A named asset that is missing is quietly nothing (the package is looked for before the load, as the subsystem does).
-		return Path.IsValid() && FPackageName::DoesPackageExist(Path.GetLongPackageName()) ? Path.TryLoad() : nullptr;
-	}
-}
 
 UWorldWeatherPrecipitationComponent::UWorldWeatherPrecipitationComponent()
 {
@@ -90,10 +80,10 @@ void UWorldWeatherPrecipitationComponent::BeginPlay()
 {
 	Super::BeginPlay();
 	const UWorldWeatherSettings* S = UWorldWeatherSettings::Get();
-	RainSystem = Cast<UNiagaraSystem>(LoadIfPresent(S->RainSystem.ToSoftObjectPath()));
-	SnowSystem = Cast<UNiagaraSystem>(LoadIfPresent(S->SnowSystem.ToSoftObjectPath()));
-	OcclusionTarget = Cast<UTextureRenderTarget2D>(LoadIfPresent(S->OcclusionTarget.ToSoftObjectPath()));
-	Collection = Cast<UMaterialParameterCollection>(LoadIfPresent(S->WeatherCollection.ToSoftObjectPath()));
+	RainSystem = Cast<UNiagaraSystem>(UWorldWeatherSettings::LoadIfPresent(S->RainSystem.ToSoftObjectPath()));
+	SnowSystem = Cast<UNiagaraSystem>(UWorldWeatherSettings::LoadIfPresent(S->SnowSystem.ToSoftObjectPath()));
+	OcclusionTarget = Cast<UTextureRenderTarget2D>(UWorldWeatherSettings::LoadIfPresent(S->OcclusionTarget.ToSoftObjectPath()));
+	Collection = Cast<UMaterialParameterCollection>(UWorldWeatherSettings::LoadIfPresent(S->WeatherCollection.ToSoftObjectPath()));
 	if (Occlusion)
 	{
 		Occlusion->TextureTarget = OcclusionTarget;

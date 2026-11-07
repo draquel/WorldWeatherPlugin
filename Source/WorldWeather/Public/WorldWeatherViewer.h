@@ -9,6 +9,9 @@
 
 class APlayerController;
 class ULocalFogVolumeComponent;
+class UWorldWeatherAmbienceComponent;
+class UWorldWeatherLensComponent;
+class UWorldWeatherLightningComponent;
 class UWorldWeatherPrecipitationComponent;
 
 /**
@@ -40,6 +43,18 @@ public:
 	/** The precipitation about the camera (the particles and the occlusion capture). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Weather")
 	TObjectPtr<UWorldWeatherPrecipitationComponent> Precipitation;
+
+	/** The rain and wind loops and the thunder (P4). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Weather")
+	TObjectPtr<UWorldWeatherAmbienceComponent> Ambience;
+
+	/** The lens: drops, frost, a wet darkening (P4). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Weather")
+	TObjectPtr<UWorldWeatherLensComponent> Lens;
+
+	/** The bolt at a strike and its thunder (P4). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Weather")
+	TObjectPtr<UWorldWeatherLightningComponent> Lightning;
 
 	/** The fog's radial density as last applied (0 = none). */
 	UFUNCTION(BlueprintPure, Category = "Weather")

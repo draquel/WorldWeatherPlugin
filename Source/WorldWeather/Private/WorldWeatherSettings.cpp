@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "WorldWeatherSettings.h"
+#include "Misc/PackageName.h"
 
 UWorldWeatherSettings::UWorldWeatherSettings()
 {
@@ -35,4 +36,9 @@ FWorldWeatherAccumulatorRates UWorldWeatherSettings::MakeRates() const
 const UWorldWeatherSettings* UWorldWeatherSettings::Get()
 {
 	return GetDefault<UWorldWeatherSettings>();
+}
+
+UObject* UWorldWeatherSettings::LoadIfPresent(const FSoftObjectPath& Path)
+{
+	return !Path.IsNull() && FPackageName::DoesPackageExist(Path.GetLongPackageName()) ? Path.TryLoad() : nullptr;
 }

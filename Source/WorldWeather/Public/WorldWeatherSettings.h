@@ -10,8 +10,10 @@
 #include "WorldWeatherSettings.generated.h"
 
 class UCurveFloat;
+class UMaterialInterface;
 class UMaterialParameterCollection;
 class UNiagaraSystem;
+class USoundBase;
 class UTextureRenderTarget2D;
 class UWorldWeatherPresetTable;
 
@@ -353,6 +355,60 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Precipitation Effects", meta = (ClampMin = "0"))
 	float OcclusionBias = 40.0f;
 
+	// --- Ambience (the plan's P4, D65: looping sources on the viewer, their volume and filter from the conditions at the camera) ---
+
+	/** A light rain loop (a MetaSound source with a float input Rate, or any sound: its volume follows the rate). None: silent. */
+	UPROPERTY(Config, EditAnywhere, Category = "Ambience")
+	TSoftObjectPtr<USoundBase> RainLightSound;
+
+	/** A heavy rain loop, faded in over the light one as the rate passes half. None: the light loop alone. */
+	UPROPERTY(Config, EditAnywhere, Category = "Ambience")
+	TSoftObjectPtr<USoundBase> RainHeavySound;
+
+	/** A wind loop (its volume the wind intensity with the gusts; a MetaSound's float input Wind gets it too). None: silent. */
+	UPROPERTY(Config, EditAnywhere, Category = "Ambience")
+	TSoftObjectPtr<USoundBase> WindSound;
+
+	/** A thunder clap, played once per strike after the sound's travel time, quieter with distance. None: silent. */
+	UPROPERTY(Config, EditAnywhere, Category = "Ambience")
+	TSoftObjectPtr<USoundBase> ThunderSound;
+
+	/** The ambience's overall volume. */
+	UPROPERTY(Config, EditAnywhere, Category = "Ambience", meta = (ClampMin = "0", ClampMax = "2"))
+	float AmbienceVolume = 1.0f;
+
+	/** The loops' low-pass cutoff when the viewer is fully sheltered (exposure 0), Hz; 20,000 in the open. */
+	UPROPERTY(Config, EditAnywhere, Category = "Ambience", meta = (ClampMin = "100", ClampMax = "20000"))
+	float InteriorLowPassHz = 600.0f;
+
+	/** How much the loops are quieter when fully sheltered (0 = as loud as outside). */
+	UPROPERTY(Config, EditAnywhere, Category = "Ambience", meta = (ClampMin = "0", ClampMax = "1"))
+	float InteriorVolumeDrop = 0.5f;
+
+	/** The speed of sound, uu/s: a strike's thunder arrives this much later per unit of distance. */
+	UPROPERTY(Config, EditAnywhere, Category = "Ambience", meta = (ClampMin = "100"))
+	float SpeedOfSound = 34300.0f;
+
+	/** A strike farther than this makes no thunder; the volume falls linearly to it. */
+	UPROPERTY(Config, EditAnywhere, Category = "Ambience", meta = (ClampMin = "1000"))
+	float ThunderMaxDistance = 60000.0f;
+
+	// --- The lens (the plan's P4: an unbound post-process on the viewer, local players only) ---
+
+	/** The post-process material (M_WeatherLens: drops when exposed and looking up, frost at the cold end, a wet darkening). None: no lens. */
+	UPROPERTY(Config, EditAnywhere, Category = "Lens")
+	TSoftObjectPtr<UMaterialInterface> LensMaterial;
+
+	/** How fast the lens blends toward its target weight, per second (FInterpTo). */
+	UPROPERTY(Config, EditAnywhere, Category = "Lens", meta = (ClampMin = "0.1"))
+	float LensBlendSpeed = 2.0f;
+
+	// --- Lightning (the plan's P4) ---
+
+	/** The bolt drawn at a strike's place (a Niagara system, spawned once per strike, auto-destroyed). None: the flash alone. */
+	UPROPERTY(Config, EditAnywhere, Category = "Lightning")
+	TSoftObjectPtr<UNiagaraSystem> LightningSystem;
+
 	/** The rules the pure resolution uses, from the values above. */
 	FWorldWeatherRules MakeRules() const;
 
@@ -360,4 +416,12 @@ public:
 	FWorldWeatherAccumulatorRates MakeRates() const;
 
 	static const UWorldWeatherSettings* Get();
+
+	/**
+	 * Loads one of the assets named above, or nothing when it is not there (the content script not run yet, a cooked
+	 * build without it): the package is looked for before the load, which would log a warning.
+	 * @param Path The asset's path.
+	 * @return The asset, or null.
+	 */
+	static UObject* LoadIfPresent(const FSoftObjectPath& Path);
 };

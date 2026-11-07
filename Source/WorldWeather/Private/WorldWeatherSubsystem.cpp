@@ -42,24 +42,18 @@ void UWorldWeatherSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Collection.InitializeDependency<UWorldClockSubsystem>();
 
 	const UWorldWeatherSettings* Settings = UWorldWeatherSettings::Get();
-	// A named asset that is not there (the content script not run yet, a cooked build without it) is quietly the default:
-	// the package is looked for before the load, which would log a warning.
-	auto LoadIfPresent = [](const FSoftObjectPath& Path) -> UObject*
-	{
-		return !Path.IsNull() && FPackageName::DoesPackageExist(Path.GetLongPackageName()) ? Path.TryLoad() : nullptr;
-	};
-	Table = Cast<UWorldWeatherPresetTable>(LoadIfPresent(Settings->PresetTable.ToSoftObjectPath()));
+	Table = Cast<UWorldWeatherPresetTable>(UWorldWeatherSettings::LoadIfPresent(Settings->PresetTable.ToSoftObjectPath()));
 	if (!Table || Table->Presets.Num() == 0)
 	{
 		Table = NewObject<UWorldWeatherPresetTable>(this, TEXT("DefaultWeatherPresets"));
 		Table->ResetToDefaults();
 	}
-	TemperatureCurve = Cast<UCurveFloat>(LoadIfPresent(Settings->TemperatureCurve.ToSoftObjectPath()));
-	WeatherCollection = Cast<UMaterialParameterCollection>(LoadIfPresent(Settings->WeatherCollection.ToSoftObjectPath()));
+	TemperatureCurve = Cast<UCurveFloat>(UWorldWeatherSettings::LoadIfPresent(Settings->TemperatureCurve.ToSoftObjectPath()));
+	WeatherCollection = Cast<UMaterialParameterCollection>(UWorldWeatherSettings::LoadIfPresent(Settings->WeatherCollection.ToSoftObjectPath()));
 	for (const FWorldWeatherMirrorEntry& Entry : Settings->MirrorTable)
 	{
 		const FSoftObjectPath CollectionPath = Entry.Collection.ToSoftObjectPath();
-		UMaterialParameterCollection* MPC = Cast<UMaterialParameterCollection>(LoadIfPresent(CollectionPath));
+		UMaterialParameterCollection* MPC = Cast<UMaterialParameterCollection>(UWorldWeatherSettings::LoadIfPresent(CollectionPath));
 		if (!MPC || Entry.Parameter.IsNone())
 		{
 			if (!Entry.Parameter.IsNone() && CollectionPath.IsValid() && !FPackageName::DoesPackageExist(CollectionPath.GetLongPackageName()))

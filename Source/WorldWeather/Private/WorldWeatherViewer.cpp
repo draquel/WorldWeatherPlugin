@@ -2,6 +2,10 @@
 
 #include "WorldWeatherViewer.h"
 #include "WorldWeather.h"
+#include "WorldWeatherAmbienceComponent.h"
+#include "WorldWeatherLensComponent.h"
+#include "WorldWeatherLightningComponent.h"
+#include "WorldWeatherMath.h"
 #include "WorldWeatherPrecipitationComponent.h"
 #include "WorldWeatherSettings.h"
 #include "WorldWeatherSubsystem.h"
@@ -41,6 +45,15 @@ AWorldWeatherViewer::AWorldWeatherViewer()
 
 	Precipitation = CreateDefaultSubobject<UWorldWeatherPrecipitationComponent>(TEXT("Precipitation"));
 	Precipitation->SetupAttachment(Root);
+
+	// P4: what the player hears, what is on the lens, the bolt and thunder of a strike.
+	Ambience = CreateDefaultSubobject<UWorldWeatherAmbienceComponent>(TEXT("Ambience"));
+	Ambience->SetupAttachment(Root);
+	Lens = CreateDefaultSubobject<UWorldWeatherLensComponent>(TEXT("Lens"));
+	Lens->SetupAttachment(Root);
+	Lightning = CreateDefaultSubobject<UWorldWeatherLightningComponent>(TEXT("Lightning"));
+	Lightning->SetupAttachment(Root);
+	Lightning->SetAmbience(Ambience);
 }
 
 void AWorldWeatherViewer::SetPlayer(APlayerController* InPlayer)
@@ -108,5 +121,20 @@ void AWorldWeatherViewer::Tick(float DeltaSeconds)
 	if (Precipitation)
 	{
 		Precipitation->UpdateWeather(ViewConditions, View, DeltaSeconds);
+	}
+
+	// P4: the ambience by the wind's intensity (the gust is in the vector), the lens by the cold and the camera's look.
+	const float WindIntensity = FMath::Clamp(static_cast<float>(ViewConditions.WindVector.Size()) / FMath::Max(Settings->StrongWindAbove, 1.0f), 0.0f, 1.0f);
+	if (Ambience)
+	{
+		Ambience->UpdateWeather(ViewConditions, WindIntensity, DeltaSeconds);
+	}
+	if (Lens)
+	{
+		const APlayerController* PC = Player.Get();
+		const FVector Forward = PC && PC->PlayerCameraManager ? PC->PlayerCameraManager->GetCameraRotation().Vector() : FVector::ForwardVector;
+		const float LookUp = static_cast<float>(FVector::DotProduct(Forward, ViewConditions.Up));
+		const float Cold = UWorldWeatherMath::ColdFactor(ViewConditions.TemperatureC, Settings->SnowBelowC, Settings->SleetBandC);
+		Lens->UpdateWeather(ViewConditions, Cold, LookUp, DeltaSeconds);
 	}
 }
