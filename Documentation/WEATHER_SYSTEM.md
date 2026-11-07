@@ -176,10 +176,11 @@ Three more components on the viewer, fed the conditions at the camera every tick
 The character plugin reads the weather for the pawn (`UVCMovementComponent`, behind `WITH_WORLD_WEATHER`: the plugin is
 optional to it): `UpdateVoxelTerrainContext` reads `GetConditionsAt(pawn)` with the terrain context (every 0.1 s) and
 keeps the wind, the exposure and the wetness; `CalcVelocity` adds the wind's drift (`ComputeWindDrift`, a pure static
-beside the world edge's push-back: the wind x `WindPushFactor` x the exposure, a current the pawn rides whatever it does
-itself) after the braking and the friction and takes the previous tick's off before them, so a standing pawn drifts and
-a pawn walking into the wind is slowed (flying exempt), and the ground friction loses `Wetness x WetGripFactor` of
-itself.
+beside the world edge's push-back: the wind x `WindPushFactor` x the exposure, scaled by the pawn's own speed over
+its max speed, or full in the air) after the braking and the friction and takes the previous tick's off before them,
+so a standing pawn idles in any wind, a pawn walking into the wind is slowed and one walking with it helped, and a
+fall is carried (flying exempt; the standing drift of the first P4 was dropped on 2026-11-07), and the ground
+friction loses `Wetness x WetGripFactor` of itself.
 Both run inside the movement simulation, so the client's prediction and the server agree (the sync point is the same on
 both). Test `VoxelCharacter.Movement.WindPush`.
 
@@ -293,6 +294,7 @@ components, its alpha a separate pin; and a biome's mid temperature is no guide 
 The ambience, lens and lightning components of section 8, the character plugin's wind drift and wet grip, the
 dedicated-server test's `WeatherSync` step and QA area F12. Seen in PIE on `VoxelDemo`: under `ww.Wind 90 800` (756 uu/s
 at the pawn once the 30 s blend is through) a standing pawn drifts east at 75 to 93 uu/s, sampled each second over ten
+(the standing drift was dropped after P5, 2026-11-07: the drift scales with the pawn's own motion, full in the air)
 (`vox.Debug.Capture`'s speed 72 to 94), and not at all in a calm; under a Storm the rain loops play at 0.58 and 0.42
 (light and heavy, rate 0.72) with the wind loop at the storm's full, and inside the Tiled dungeon's entrance
 (`vox.TPPOI Tiled; vox.TPRoom Entrance`) they drop to 0.21 and 0.29 under a 600 Hz low-pass with the lens off; a strike

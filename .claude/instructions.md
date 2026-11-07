@@ -146,7 +146,8 @@
 - **Lightning** (`UWorldWeatherLightningComponent`): bound to `OnLightning`; the settings' `LightningSystem` at the strike
   when named (none is), the thunder handed to the ambience.
 - **The pawn** is the character plugin's: `UVCMovementComponent::ComputeWindDrift` and the wet grip, behind
-  `WITH_WORLD_WEATHER` (optional there). Keep the push a lean: it runs inside the predicted movement on both machines.
+  `WITH_WORLD_WEATHER` (optional there). Keep the push a lean on the pawn's own motion and on a fall, never a shove of
+  a standing pawn: it runs inside the predicted movement on both machines.
 
 ## Reactions (P5)
 Nothing here: the save field is VoxelWorldSave's (`FVoxelWorldSaveDocument.Weather`, imported after the clock), the
