@@ -1,8 +1,8 @@
 # WorldWeatherPlugin — Claude instructions
 
-> State as of 2026-11-06 (P0, the plugin and the core, and P1, the sky, of the weather system plan). This file is the plugin's reference
-> with `Documentation/WEATHER_SYSTEM.md`; its design record is the parent project's `Documentation/WEATHER_SYSTEM_PLAN.md`
-> (D58-D66, phases P0-P6).
+> State as of 2026-11-07 (P0-P6 of the weather system plan, closed). This file is the plugin's reference with
+> `Documentation/WEATHER_SYSTEM.md` (section 10 the results per phase, 11 what is left); its design record is the
+> parent project's `Documentation/WEATHER_SYSTEM_PLAN.md` (D58-D66, phases P0-P6; frozen).
 
 ## Plugin identity
 - One runtime module `WorldWeather`. Log category `LogWorldWeather`. Depends on Core / CoreUObject / Engine /

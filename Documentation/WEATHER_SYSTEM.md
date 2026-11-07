@@ -1,8 +1,10 @@
 # The weather system
 
 > The reference document of WorldWeatherPlugin, with `.claude/instructions.md`. The design record is the parent
-> project's `Documentation/WEATHER_SYSTEM_PLAN.md` (the question, the survey, the architecture, D58-D66, P0-P6). Each
-> phase adds its results paragraph here (section 6).
+> project's `Documentation/WEATHER_SYSTEM_PLAN.md` (the question, the survey, the architecture, D58-D66, P0-P6; frozen
+> 2026-11-07). The results per phase are section 10, what is left section 11; the words are the parent's
+> `Documentation/GLOSSARY.md` (Weather), the console its `EDITOR_CONSOLE_GUIDE.md` section 8, the hand-run checks QA
+> area F12.
 
 ## 1. What it is
 
@@ -328,3 +330,21 @@ cover) and burns steady again under Clear. A Storm saved (`vox.Save`), PIE stopp
 sync point (serial 11, its start at the same clock second) with no change event. The suite is 33/33 with the weather,
 clock, character movement and AI, campsite and save roots. Seen on the way: a planned deer at the demo's cell (-2,1)
 spawns at a point in deep water and is despawned the same pass, every pass (G139).
+
+## 11. Later
+
+What the plan named and left, and what the phases found, in one list (2026-11-07):
+
+- **The Megaplants' skinned assemblies** (P3's slice): their baked static meshes have no wind; moving them is a
+  scatter rendering slice of its own.
+- **The Megascans foliage's wind intensity**: a static switch and per-instance scalars in the pack's master; driving it
+  takes a project material instance per scatter definition, written through a named dynamic instance.
+- **A bolt**: `LightningSystem` is named by nothing; the flash and the thunder carry a strike.
+- **A lean against the wind**: the pawn's motion is slowed and helped, nothing shows it; the animation layer can read
+  `UVCMovementComponent::GetWeatherWind`.
+- **The campfire's flame**: the fire gutters as its light only; it has no flame particles to thin.
+- **Music**: no music system; `OnWeatherChanged` and the tags are its hook.
+- **G139**: a planned deer at the demo's cell (-2,1) spawns in deep water every pass (the surface NPC spawner's,
+  seen in P5).
+- **Not in scope**, as the plan said: seasons and a calendar, a planet-aware cloud material, geometry waves, rain
+  filling pools or snow changing voxels, weather in dungeons, the front grid.
