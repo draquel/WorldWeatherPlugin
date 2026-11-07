@@ -3,8 +3,12 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 
+#include "WorldWeatherAmbienceComponent.h"
+#include "WorldWeatherLensComponent.h"
+#include "WorldWeatherLightningComponent.h"
 #include "WorldWeatherMath.h"
 #include "WorldWeatherPrecipitationComponent.h"
+#include "Components/AudioComponent.h"
 #include "WorldWeatherPreset.h"
 #include "WorldWeatherSettings.h"
 #include "WorldWeatherSubsystem.h"
@@ -14,6 +18,7 @@
 #include "Components/SceneCaptureComponent2D.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "GameFramework/WorldSettings.h"
 #include "NiagaraComponent.h"
 #include "WorldClockSubsystem.h"
 
@@ -533,7 +538,11 @@ bool FWorldWeatherPrecipitationSetupTest::RunTest(const FString& Parameters)
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("WorldWeatherPrecipitationTest"));
 	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
 	Context.SetCurrentWorld(World);
+	World->InitializeActorsForPlay(FURL());
+	World->BeginPlay();
 	AWorldWeatherViewer* Viewer = World->SpawnActor<AWorldWeatherViewer>();
+	// A bare test world has no game mode to dispatch BeginPlay to the actors: the component loads the systems there.
+	World->GetWorldSettings()->NotifyBeginPlay();
 	if (TestNotNull(TEXT("A viewer spawns"), Viewer) && TestNotNull(TEXT("... with a precipitation component"), Viewer->Precipitation.Get()))
 	{
 		UWorldWeatherPrecipitationComponent* P = Viewer->Precipitation;
@@ -574,6 +583,68 @@ bool FWorldWeatherPrecipitationSetupTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Nothing falling: inactive"), P->GetActiveType() == EWorldWeatherPrecipitation::None);
 		TestEqual(TEXT("Nothing falling: rate 0"), P->GetActiveRate(), 0.0f);
 	}
+	World->EndPlay(EEndPlayReason::Quit);
+	GEngine->DestroyWorldContext(World);
+	World->DestroyWorld(false);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The viewer's player-facing components (P4): the ambience, the lens and the lightning exist; without sounds or a lens
+// material they stay silent and weightless; a strike reaches the lightning component and queues thunder with the sound's
+// delay; the wind push's inputs are the conditions'.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldWeatherPlayerComponentsTest, "WorldWeather.Viewer.Player", WORLDWEATHER_TEST_FLAGS)
+bool FWorldWeatherPlayerComponentsTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("WorldWeatherPlayerTest"));
+	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+	Context.SetCurrentWorld(World);
+	World->InitializeActorsForPlay(FURL());
+	World->BeginPlay();
+	UWorldWeatherSubsystem* Weather = World->GetSubsystem<UWorldWeatherSubsystem>();
+	AWorldWeatherViewer* Viewer = World->SpawnActor<AWorldWeatherViewer>();
+	// A bare test world has no game mode, and the game mode is what dispatches BeginPlay to the actors: the lightning
+	// component binds the subsystem's delegate there.
+	World->GetWorldSettings()->NotifyBeginPlay();
+	if (TestNotNull(TEXT("The weather"), Weather) && TestNotNull(TEXT("A viewer spawns"), Viewer)
+		&& TestNotNull(TEXT("... with ambience"), Viewer->Ambience.Get()) && TestNotNull(TEXT("... a lens"), Viewer->Lens.Get()) && TestNotNull(TEXT("... lightning"), Viewer->Lightning.Get()))
+	{
+		FWorldWeatherConditions C;
+		C.PrecipitationType = EWorldWeatherPrecipitation::Rain;
+		C.PrecipitationRate = 0.8f;
+		C.Exposure = 1.0f;
+		C.Up = FVector::UpVector;
+		C.WindVector = FVector(600.0, 0.0, 0.0);
+		Viewer->Ambience->UpdateWeather(C, 1.0f, 0.016f);
+		const bool bHasRain = Viewer->Ambience->RainLight && Viewer->Ambience->RainLight->Sound != nullptr;
+		if (!bHasRain)
+		{
+			TestTrue(TEXT("No rain sound named: the loop's volume is 0"), Viewer->Ambience->GetVolumes().X == 0.0f);
+		}
+		TestEqual(TEXT("Open: no low-pass"), Viewer->Ambience->GetLowPassHz(), 20000.0f, 1.0f);
+		C.Exposure = 0.0f;
+		Viewer->Ambience->UpdateWeather(C, 1.0f, 0.016f);
+		TestEqual(TEXT("Sheltered: the settings' interior cutoff"), Viewer->Ambience->GetLowPassHz(), UWorldWeatherSettings::Get()->InteriorLowPassHz, 1.0f);
+
+		// The lens without a material: weightless whatever falls.
+		Viewer->Lens->UpdateWeather(C, 1.0f, 1.0f, 1.0f);
+		const bool bHasLens = !UWorldWeatherSettings::Get()->LensMaterial.IsNull();
+		if (!bHasLens)
+		{
+			TestEqual(TEXT("No lens material: weight 0"), Viewer->Lens->GetWeight(), 0.0f);
+		}
+
+		// A strike 3,430 uu away: one strike counted, its thunder queued (no sound: it still queues, plays nothing).
+		const FVector Here = Viewer->GetActorLocation();
+		Weather->Strike(Here + FVector(3430.0, 0.0, 0.0));
+		TestEqual(TEXT("The lightning component saw the strike"), Viewer->Lightning->GetStrikeCount(), 1);
+		TestEqual(TEXT("The thunder is queued"), Viewer->Ambience->GetPendingThunder(), 1);
+		TestEqual(TEXT("Not played yet (0.1 s away)"), Viewer->Ambience->GetThunderPlayed(), 0);
+		Weather->Strike(Here + FVector(UWorldWeatherSettings::Get()->ThunderMaxDistance + 1000.0f, 0.0, 0.0));
+		TestEqual(TEXT("A strike past the thunder's reach queues nothing"), Viewer->Ambience->GetPendingThunder(), 1);
+	}
+	World->EndPlay(EEndPlayReason::Quit);
 	GEngine->DestroyWorldContext(World);
 	World->DestroyWorld(false);
 	return true;

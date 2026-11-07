@@ -150,7 +150,43 @@ definition written through a named dynamic instance; those plants wait. The Mega
 wind at all; their skinned assemblies are the scatter rendering slice the plan names, not a material input, and are not
 part of this phase.
 
-## 8. Results
+## 8. The player (P4)
+
+Three more components on the viewer, fed the conditions at the camera every tick (D65 for the sound):
+
+- **`UWorldWeatherAmbienceComponent`**: three looping two-dimensional sources, light rain, heavy rain and wind (the
+  settings' `RainLightSound`, `RainHeavySound`, `WindSound`: any `USoundBase`; a MetaSound source also gets the float
+  inputs `Rate`, `Wind`, `Exposure`), their volume from the rate (light up to half, heavy past it; snow a third as loud)
+  and the wind's intensity with its gusts, both quieter (`InteriorVolumeDrop`) and low-passed (`InteriorLowPassHz`) by
+  the viewer's shelter; started with a fade when they have volume, faded out when not. Thunder is one-shot: the
+  lightning component queues it with the strike's distance, and it plays after `Distance / SpeedOfSound`, quieter to
+  `ThunderMaxDistance`. `ww.Viewer.Audio 0` silences it. The sounds are placeholders: a generated rain loop and thunder
+  clap (`Scripts/make_weather_sounds.py`, imported by the content script as `SW_WeatherRain` and `SW_WeatherThunder`)
+  and the animation sample's `Starter_Wind05`; no submix or modulation (none exists in the project).
+- **`UWorldWeatherLensComponent`**: an unbound post-process component, priority over the clock's exposure and the
+  dungeon's interior, carrying a dynamic instance of `LensMaterial` (`M_WeatherLens`, built by the content script: a
+  Custom node over the scene colour after tonemapping) as its one blendable. The instance's `Drops` is the rate times the
+  exposure times how far up the camera looks (none below the horizon, fewer in snow), `Frost` the cold factor at the view,
+  `Wet` the ground's wetness; the inputs and the blend weight move with `FInterpTo` at `LensBlendSpeed`, and the weight is
+  exactly 0 when nothing shows, so a clear day costs no pass. `ww.Viewer.Lens 0` turns it off.
+- **`UWorldWeatherLightningComponent`**: bound to the subsystem's `OnLightning`; it spawns the settings' `LightningSystem`
+  at the strike's place when one is named (none is: the flash is the sky's, through the clock controller's slot) and hands
+  the thunder to the ambience with the strike's distance from the viewer.
+
+The character plugin reads the weather for the pawn (`UVCMovementComponent`, behind `WITH_WORLD_WEATHER`: the plugin is
+optional to it): `UpdateVoxelTerrainContext` reads `GetConditionsAt(pawn)` with the terrain context (every 0.1 s) and
+keeps the wind, the exposure and the wetness; `CalcVelocity` adds the wind's drift (`ComputeWindDrift`, a pure static
+beside the world edge's push-back: the wind x `WindPushFactor` x the exposure, a current the pawn rides whatever it does
+itself) after the braking and the friction and takes the previous tick's off before them, so a standing pawn drifts and
+a pawn walking into the wind is slowed (flying exempt), and the ground friction loses `Wetness x WetGripFactor` of
+itself.
+Both run inside the movement simulation, so the client's prediction and the server agree (the sync point is the same on
+both). Test `VoxelCharacter.Movement.WindPush`.
+
+The dedicated-server PIE test (`VoxelEngine.Replication.Framework`) gained a row: the server sets a storm, and the client
+reads the same sync point serial, preset and front within a sync interval. The hand-run QA plan gained an area, F11.
+
+## 9. Results
 
 ### P0 (2026-11-06): the plugin and the core
 
@@ -218,3 +254,27 @@ masters compile on the next editor launch (the terrain masters take minutes, whi
 them in a slow task: the script runs headless). Two lessons: a vector parameter's main material output is three
 components, its alpha a separate pin; and a biome's mid temperature is no guide for a biome spanning the climate
 (Alpine, Coast), hence `LocalCold`.
+
+### P4 (2026-11-07): the player
+
+The ambience, lens and lightning components of section 8, the character plugin's wind drift and wet grip, the
+dedicated-server test's `WeatherSync` step and QA area F11. Seen in PIE on `VoxelDemo`: under `ww.Wind 90 800` (756 uu/s
+at the pawn once the 30 s blend is through) a standing pawn drifts east at 75 to 93 uu/s, sampled each second over ten
+(`vox.Debug.Capture`'s speed 72 to 94), and not at all in a calm; under a Storm the rain loops play at 0.58 and 0.42
+(light and heavy, rate 0.72) with the wind loop at the storm's full, and inside the Tiled dungeon's entrance
+(`vox.TPPOI Tiled; vox.TPRoom Entrance`) they drop to 0.21 and 0.29 under a 600 Hz low-pass with the lens off; a strike
+at 3,000 uu (`ww.Strike 3000`) queues its thunder and plays it 0.09 s later; the lens shows drops 0.37 looking up into
+the fall and 0.00 looking down, frost 1.0 at -5.8 C (and on `SmoothTerrain_Planet` at 65 N under a Snow front) and
+0.0 at 6 C; with the lens on against off in the same storm frame the edges are paler by 46 to 66 per channel and the
+centre unchanged (the frost vignette), the drops a scatter of refracting beads looking up. The lens material's first
+cut never rendered: a custom node's `SceneTextureLookup` is undeclared unless a SceneTexture node is in the graph,
+the material fails to compile and the editor uses the default one with one Warning in the log (the `ww.Weather`
+line still shows the weight: it is the component's, not proof the shader runs), and that default drew a soft brown
+frame at the screen's edges, chased as a frost bug for a while; the graph now carries a SceneTexture node
+(PostProcessInput0) feeding the custom node its `Scene`. The first cut of the push, a per-tick lean, never moved a standing pawn: the braking of the next
+tick ate it; hence the drift taken off before the braking and put back after it. Two more lessons: a test world made
+with `CreateWorld` has no game mode, so nothing dispatches `BeginPlay` to its actors (`NotifyBeginPlay` on the world
+settings does, `EndPlay` on the world before the teardown); and a unity build merges two files' anonymous namespaces,
+so a helper copied into a second file is a redefinition (`UWorldWeatherSettings::LoadIfPresent` is the one copy now).
+The suite is 20/20 with the weather, clock and character movement roots; the in-editor gate 27/27 with the parity
+lines unchanged. The wet grip is not measured here (F11-08 is the hand-run row).

@@ -133,6 +133,21 @@
   VoxelWorlds' (`MATERIAL_SYSTEM.md` "Weather surface", `SCATTER_SYSTEM.md` "Billboard Material", `WATER_SYSTEM.md`);
   the Megascans plants' wind intensity and the Megaplants' wind are not driven (section 7 of the reference says why).
 
+## The player (P4; the plan's D65)
+- **The ambience** (`UWorldWeatherAmbienceComponent`, on the viewer): three looping 2D sources (`RainLightSound`,
+  `RainHeavySound`, `WindSound`; a MetaSound source also gets the float inputs Rate, Wind, Exposure), their volume from
+  the rate and the wind intensity, both quieter and low-passed by the shelter (`InteriorVolumeDrop`, `InteriorLowPassHz`);
+  thunder one-shot after `Distance / SpeedOfSound`, quieter to `ThunderMaxDistance`, queued by the lightning component.
+  The placeholders are generated (`Scripts/make_weather_sounds.py`, imported by `configure_weather.py`) and the
+  animation sample's wind. `ww.Viewer.Audio 0|1`.
+- **The lens** (`UWorldWeatherLensComponent`): an unbound post-process component with a dynamic instance of
+  `LensMaterial` (`M_WeatherLens`, scalars Drops, Frost, Wet) as its one blendable; the weight blends with `FInterpTo`
+  and is 0 when nothing shows. `ww.Viewer.Lens 0|1`.
+- **Lightning** (`UWorldWeatherLightningComponent`): bound to `OnLightning`; the settings' `LightningSystem` at the strike
+  when named (none is), the thunder handed to the ambience.
+- **The pawn** is the character plugin's: `UVCMovementComponent::ComputeWindDrift` and the wet grip, behind
+  `WITH_WORLD_WEATHER` (optional there). Keep the push a lean: it runs inside the predicted movement on both machines.
+
 ## Rules
 - Never read the authority's `Sync` on a client: every reader goes through `FindSync()` / the public getters, which
   resolve the replicated state's point.
@@ -146,8 +161,9 @@
   `Math.WindVector`, `Math.Accumulators`, `Math.Lightning`, `Math.Occlusion`, `Sync.Resolve` (pure); `Subsystem.Defaults`
   (a game world without a provider: the defaults, SetWeather, the blend, the schedule, the lock, the export round trip,
   the wind), `Viewer.Precipitation` (the component's capture setup, inactive without a system, inactive when nothing
-  falls). The capture's rendering and the material's occlusion are seen in PIE (`Scripts/qa/weather_shots.py --roof`),
-  not tested headless.
+  falls), `Viewer.Player` (the ambience's shelter filter, the weightless lens without a material, a strike reaching the
+  lightning component and queuing thunder). The capture's rendering, the material's occlusion, the sounds and the lens
+  are seen in PIE (`Scripts/qa/weather_shots.py`), not tested headless.
 
 ## Console
 - `ww.Weather` (the present preset and blend, the front, the sky controller and viewers and the sky-write cost, the
@@ -155,6 +171,7 @@
   precipitation and captures), `ww.Set <Preset|Weather.Preset.X> [BlendSeconds]` (authority; no argument lists the presets), `ww.Lock 0|1`,
   `ww.Wind <Azimuth> <Speed>`, `ww.Strike [Distance]` (this machine), `ww.Next`; the cvars `ww.Viewer.Fog 0|1`
   (`WorldWeatherViewer.cpp`), `ww.Viewer.Precipitation 0|1`, `ww.Viewer.Occlusion 0|1`, `ww.Occlusion.Frames N`
-  (`WorldWeatherPrecipitationComponent.cpp`). Registered in `WorldWeatherConsole.cpp`;
+  (`WorldWeatherPrecipitationComponent.cpp`), `ww.Viewer.Audio 0|1` (`WorldWeatherAmbienceComponent.cpp`),
+  `ww.Viewer.Lens 0|1` (`WorldWeatherLensComponent.cpp`). Registered in `WorldWeatherConsole.cpp`;
   the game module's `vox.Weather` and `vox.Wind` run `ww.Weather` and `ww.Wind`. All of them:
   `Documentation/EDITOR_CONSOLE_GUIDE.md` §7 (project root).

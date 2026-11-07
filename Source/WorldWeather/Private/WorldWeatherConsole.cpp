@@ -4,6 +4,9 @@
 // ww.Strike, ww.Next. The game module's vox.Weather and vox.Wind run ww.Weather and ww.Wind.
 
 #include "WorldWeather.h"
+#include "WorldWeatherAmbienceComponent.h"
+#include "WorldWeatherLensComponent.h"
+#include "WorldWeatherLightningComponent.h"
 #include "WorldWeatherMath.h"
 #include "WorldWeatherPrecipitationComponent.h"
 #include "WorldWeatherPreset.h"
@@ -110,6 +113,14 @@ namespace WorldWeatherConsole
 				UE_LOG(LogWorldWeather, Display, TEXT("ww.Weather: viewer %s: precipitation %s rate %.2f (at the view: %s rate %.2f exposure %.2f), occlusion %s, %d captures"),
 					*V->GetName(), *UEnum::GetValueAsString(P->GetActiveType()), P->GetActiveRate(), *UEnum::GetValueAsString(V->GetViewConditions().PrecipitationType),
 					V->GetViewConditions().PrecipitationRate, V->GetViewConditions().Exposure, P->IsOcclusionCapturing() ? TEXT("capturing") : TEXT("off"), P->GetCaptureCount());
+			}
+			if (V && V->Ambience && V->Lens && V->Lightning)
+			{
+				const FVector Volumes = V->Ambience->GetVolumes();
+				const FVector Inputs = V->Lens->GetInputs();
+				UE_LOG(LogWorldWeather, Display, TEXT("ww.Weather: viewer %s: ambience rain %.2f / %.2f wind %.2f low-pass %.0f Hz, thunder %d pending %d played; lens weight %.2f (drops %.2f frost %.2f wet %.2f); %d strike(s)"),
+					*V->GetName(), Volumes.X, Volumes.Y, Volumes.Z, V->Ambience->GetLowPassHz(), V->Ambience->GetPendingThunder(), V->Ambience->GetThunderPlayed(),
+					V->Lens->GetWeight(), Inputs.X, Inputs.Y, Inputs.Z, V->Lightning->GetStrikeCount());
 			}
 		}
 	}
