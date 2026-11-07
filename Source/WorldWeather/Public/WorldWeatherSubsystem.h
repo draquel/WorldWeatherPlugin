@@ -15,6 +15,7 @@ class APlayerController;
 class AWorldWeatherState;
 class AWorldWeatherViewer;
 class UCurveFloat;
+class UMaterialInstanceDynamic;
 class UMaterialParameterCollection;
 class UWorldClockSubsystem;
 class UWorldWeatherPresetTable;
@@ -29,6 +30,16 @@ struct FWorldWeatherMirrorTarget
 	UPROPERTY()
 	TObjectPtr<UMaterialParameterCollection> Collection;
 
+	FName Parameter;
+	EWorldWeatherMirrorSource Source = EWorldWeatherMirrorSource(0);
+	float Scale = 1.0f;
+	float Offset = 0.0f;
+};
+
+/** A mirror table entry naming an instance group (FWorldWeatherMirrorEntry::InstanceGroup, the foliage and bolt plan's D67). */
+struct FWorldWeatherMirrorInstanceTarget
+{
+	FName Group;
 	FName Parameter;
 	EWorldWeatherMirrorSource Source = EWorldWeatherMirrorSource(0);
 	float Scale = 1.0f;
@@ -182,6 +193,37 @@ public:
 	const TScriptInterface<IWorldWeatherClimateProvider>& GetClimateProvider() const { return ClimateProvider; }
 	const TScriptInterface<IWorldWeatherShelterProvider>& GetShelterProvider() const { return ShelterProvider; }
 
+	// --- Mirror instances (the foliage and bolt plan's D67: a game registers material instances the mirror table names by group) ---
+
+	/**
+	 * Register a material instance under a group: every mirror entry naming the group writes its parameter on it each
+	 * tick. Held weakly (an instance gone is dropped); registering twice is one registration.
+	 * @param Group The mirror entries' InstanceGroup
+	 * @param Instance The instance
+	 */
+	UFUNCTION(BlueprintCallable, Category = "WorldWeather|Mirror")
+	void RegisterMirrorInstance(FName Group, UMaterialInstanceDynamic* Instance);
+
+	/**
+	 * Stop writing a group's entries on an instance.
+	 * @param Group The group it was registered under
+	 * @param Instance The instance
+	 * @return false when it was not registered there
+	 */
+	UFUNCTION(BlueprintCallable, Category = "WorldWeather|Mirror")
+	bool UnregisterMirrorInstance(FName Group, UMaterialInstanceDynamic* Instance);
+
+	/**
+	 * The live instances registered under a group.
+	 * @param Group The group
+	 * @return Their count (instances gone not counted)
+	 */
+	UFUNCTION(BlueprintPure, Category = "WorldWeather|Mirror")
+	int32 GetMirrorInstanceCount(FName Group) const;
+
+	/** The groups the mirror table names, with their live instance counts, for ww.Weather ("Group: N, ..."; empty when none). */
+	FString DescribeMirrorInstances() const;
+
 	// --- Save ---
 
 	UFUNCTION(BlueprintCallable, Category = "WorldWeather|Save")
@@ -270,6 +312,12 @@ protected:
 
 	UPROPERTY()
 	TArray<FWorldWeatherMirrorTarget> MirrorTargets;
+
+	/** The mirror entries naming an instance group (resolved at Initialize). */
+	TArray<FWorldWeatherMirrorInstanceTarget> MirrorInstanceTargets;
+
+	/** The instances registered per group, held weakly (RegisterMirrorInstance). */
+	TMap<FName, TArray<TWeakObjectPtr<UMaterialInstanceDynamic>>> MirrorInstances;
 
 	UPROPERTY()
 	TArray<TObjectPtr<AWorldWeatherViewer>> Viewers;

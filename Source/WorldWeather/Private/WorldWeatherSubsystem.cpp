@@ -19,6 +19,7 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/KismetMaterialLibrary.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialParameterCollection.h"
 #include "Misc/CoreMisc.h"
 #include "WorldClockSubsystem.h"
@@ -52,6 +53,22 @@ void UWorldWeatherSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	WeatherCollection = Cast<UMaterialParameterCollection>(UWorldWeatherSettings::LoadIfPresent(Settings->WeatherCollection.ToSoftObjectPath()));
 	for (const FWorldWeatherMirrorEntry& Entry : Settings->MirrorTable)
 	{
+		if (!Entry.InstanceGroup.IsNone())
+		{
+			// An instance target (D67): the instances a game registers under the group, written each tick.
+			if (Entry.Parameter.IsNone())
+			{
+				UE_LOG(LogWorldWeather, Warning, TEXT("WorldWeather: the mirror entry for the instance group %s names no parameter; skipped."), *Entry.InstanceGroup.ToString());
+				continue;
+			}
+			FWorldWeatherMirrorInstanceTarget& Target = MirrorInstanceTargets.AddDefaulted_GetRef();
+			Target.Group = Entry.InstanceGroup;
+			Target.Parameter = Entry.Parameter;
+			Target.Source = Entry.Source;
+			Target.Scale = Entry.Scale;
+			Target.Offset = Entry.Offset;
+			continue;
+		}
 		const FSoftObjectPath CollectionPath = Entry.Collection.ToSoftObjectPath();
 		UMaterialParameterCollection* MPC = Cast<UMaterialParameterCollection>(UWorldWeatherSettings::LoadIfPresent(CollectionPath));
 		if (!MPC || Entry.Parameter.IsNone())
@@ -89,12 +106,14 @@ void UWorldWeatherSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 			Publish(); // a front set before play (ImportState, a test) reaches the clients
 		}
 	}
-	UE_LOG(LogWorldWeather, Log, TEXT("WorldWeather: %s starts with %d presets, %s, %d mirror targets (%s)."), *InWorld.GetName(), Table ? Table->Presets.Num() : 0,
-		WeatherCollection ? *WeatherCollection->GetName() : TEXT("no weather collection"), MirrorTargets.Num(), HasAuthority() ? TEXT("authority") : TEXT("client"));
+	UE_LOG(LogWorldWeather, Log, TEXT("WorldWeather: %s starts with %d presets, %s, %d mirror targets, %d instance targets (%s)."), *InWorld.GetName(),
+		Table ? Table->Presets.Num() : 0, WeatherCollection ? *WeatherCollection->GetName() : TEXT("no weather collection"), MirrorTargets.Num(),
+		MirrorInstanceTargets.Num(), HasAuthority() ? TEXT("authority") : TEXT("client"));
 }
 
 void UWorldWeatherSubsystem::Deinitialize()
 {
+	MirrorInstances.Reset();
 	State = nullptr;
 	ClimateProvider = nullptr;
 	ShelterProvider = nullptr;
@@ -563,6 +582,62 @@ void UWorldWeatherSubsystem::SetShelterProvider(const TScriptInterface<IWorldWea
 	ExposureCache.Reset();
 }
 
+// --- Mirror instances (D67) ---
+
+void UWorldWeatherSubsystem::RegisterMirrorInstance(FName Group, UMaterialInstanceDynamic* Instance)
+{
+	if (Group.IsNone() || !Instance)
+	{
+		UE_LOG(LogWorldWeather, Warning, TEXT("WorldWeather: RegisterMirrorInstance needs a group and an instance (%s, %s)."), *Group.ToString(), *GetNameSafe(Instance));
+		return;
+	}
+	TArray<TWeakObjectPtr<UMaterialInstanceDynamic>>& Instances = MirrorInstances.FindOrAdd(Group);
+	Instances.AddUnique(Instance);
+}
+
+bool UWorldWeatherSubsystem::UnregisterMirrorInstance(FName Group, UMaterialInstanceDynamic* Instance)
+{
+	TArray<TWeakObjectPtr<UMaterialInstanceDynamic>>* Instances = MirrorInstances.Find(Group);
+	if (!Instances || !Instance)
+	{
+		return false;
+	}
+	const bool bRemoved = Instances->RemoveSwap(Instance) > 0;
+	if (Instances->Num() == 0)
+	{
+		MirrorInstances.Remove(Group);
+	}
+	return bRemoved;
+}
+
+int32 UWorldWeatherSubsystem::GetMirrorInstanceCount(FName Group) const
+{
+	int32 Count = 0;
+	if (const TArray<TWeakObjectPtr<UMaterialInstanceDynamic>>* Instances = MirrorInstances.Find(Group))
+	{
+		for (const TWeakObjectPtr<UMaterialInstanceDynamic>& Instance : *Instances)
+		{
+			Count += Instance.IsValid() ? 1 : 0;
+		}
+	}
+	return Count;
+}
+
+FString UWorldWeatherSubsystem::DescribeMirrorInstances() const
+{
+	TArray<FName> Groups;
+	for (const FWorldWeatherMirrorInstanceTarget& T : MirrorInstanceTargets)
+	{
+		Groups.AddUnique(T.Group);
+	}
+	FString Out;
+	for (const FName& Group : Groups)
+	{
+		Out += FString::Printf(TEXT("%s%s: %d"), Out.IsEmpty() ? TEXT("") : TEXT(", "), *Group.ToString(), GetMirrorInstanceCount(Group));
+	}
+	return Out;
+}
+
 // --- Save ---
 
 FWorldWeatherSaveState UWorldWeatherSubsystem::ExportState() const
@@ -716,8 +791,8 @@ void UWorldWeatherSubsystem::TickSky(float DeltaTime, double Now)
 		}
 	}
 
-	// MPC_Weather and the mirror table (D64), at this machine's view.
-	if (WeatherCollection || MirrorTargets.Num() > 0)
+	// MPC_Weather and the mirror table (D64; its instance targets D67), at this machine's view.
+	if (WeatherCollection || MirrorTargets.Num() > 0 || (MirrorInstanceTargets.Num() > 0 && MirrorInstances.Num() > 0))
 	{
 		const FVector View = GetLocalViewPoint();
 		const FWorldWeatherClimateSample Climate = GetClimateAt(View);
@@ -757,6 +832,34 @@ void UWorldWeatherSubsystem::TickSky(float DeltaTime, double Now)
 			else
 			{
 				UKismetMaterialLibrary::SetScalarParameterValue(World, T.Collection, T.Parameter, MirrorScalar(T.Source, Front, Wetness, SnowCover, TemperatureC, Gust) * T.Scale + T.Offset);
+			}
+		}
+		// The instance targets: every live instance of the entry's group; the ones gone are dropped here.
+		for (const FWorldWeatherMirrorInstanceTarget& T : MirrorInstanceTargets)
+		{
+			TArray<TWeakObjectPtr<UMaterialInstanceDynamic>>* Instances = MirrorInstances.Find(T.Group);
+			if (!Instances)
+			{
+				continue;
+			}
+			const bool bVector = T.Source == EWorldWeatherMirrorSource::WindDirection;
+			const float Value = bVector ? 0.0f : MirrorScalar(T.Source, Front, Wetness, SnowCover, TemperatureC, Gust) * T.Scale + T.Offset;
+			for (int32 i = Instances->Num() - 1; i >= 0; --i)
+			{
+				UMaterialInstanceDynamic* Instance = (*Instances)[i].Get();
+				if (!Instance)
+				{
+					Instances->RemoveAtSwap(i);
+					continue;
+				}
+				if (bVector)
+				{
+					Instance->SetVectorParameterValue(T.Parameter, FLinearColor(WindDir.X, WindDir.Y, WindDir.Z, Front.WindSpeed));
+				}
+				else
+				{
+					Instance->SetScalarParameterValue(T.Parameter, Value);
+				}
 			}
 		}
 	}

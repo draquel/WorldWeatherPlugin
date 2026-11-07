@@ -59,15 +59,25 @@ enum class EWorldWeatherMirrorSource : uint8
 	ColdFactor,
 };
 
-/** One parameter of one collection the weather writes every tick: Source x Scale + Offset (a vector source ignores both). */
+/**
+ * One parameter the weather writes every tick: Source x Scale + Offset (a vector source ignores both). Two target kinds:
+ * a collection's parameter (Collection), or, when InstanceGroup is set, the parameter of every material instance
+ * registered under that group (UWorldWeatherSubsystem::RegisterMirrorInstance; the foliage and bolt plan's D67).
+ */
 USTRUCT(BlueprintType)
 struct WORLDWEATHER_API FWorldWeatherMirrorEntry
 {
 	GENERATED_BODY()
 
+	/** The collection written (ignored when InstanceGroup is set). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mirror")
 	TSoftObjectPtr<UMaterialParameterCollection> Collection;
 
+	/** An instance group instead of a collection: the instances a game registers under this name take Parameter (a pack's per-instance wind). None: Collection. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mirror")
+	FName InstanceGroup;
+
+	/** The collection's or the instances' parameter. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mirror")
 	FName Parameter;
 

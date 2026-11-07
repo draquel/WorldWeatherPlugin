@@ -73,7 +73,10 @@
   GustFactor, Gustiness, ThunderRate, Humidity, Wetness, SnowCover, TemperatureC, LightningFlash and the vector
   WindDirection (xyz the unit wind at this machine's view, w the speed), written every tick. **The mirror table**
   (`MirrorTable`: collection, parameter, an `EWorldWeatherMirrorSource`, scale, offset) writes the same sources into any
-  other collection (VoxelWorlds' wind inputs in P3, a pack's own wind collection) with no edit to its owner.
+  other collection (VoxelWorlds' wind inputs in P3, a pack's own wind collection) with no edit to its owner, or, when an
+  entry names an `InstanceGroup` instead, onto every material instance a game registered under that group
+  (`RegisterMirrorInstance` / `UnregisterMirrorInstance`, held weakly; the foliage and bolt plan's D67: the scatter's
+  dynamic instances of the Megascans foliage, registered by VoxelWorldPOI's bridge under `FoliageWind`).
 - **The viewer** (`AWorldWeatherViewer`, transient, not replicated): one per local player controller
   (`bAutoSpawnViewers`; none on a dedicated server), following the player's camera in `TG_PostUpdateWork`, carrying a
   `ULocalFogVolumeComponent` of radius `LocalFogRadius`: the weather's fog everywhere, on a planet too where the height
@@ -131,7 +134,8 @@
   when the collection exists but the entry is wrong).
 - **This plugin writes no material.** The terrain's wetness and snow, the billboards' wind and the water's ripples are
   VoxelWorlds' (`MATERIAL_SYSTEM.md` "Weather surface", `SCATTER_SYSTEM.md` "Billboard Material", `WATER_SYSTEM.md`);
-  the Megascans plants' wind intensity and the Megaplants' wind are not driven (section 7 of the reference says why).
+  the Megascans plants' wind intensity goes through the mirror table's instance group (written on instances the game
+  registers; this plugin knows no scatter), the Megaplants' wind is not driven yet (the foliage and bolt plan's F2, F3).
 
 ## The player (P4; the plan's D65)
 - **The ambience** (`UWorldWeatherAmbienceComponent`, on the viewer): three looping 2D sources (`RainLightSound`,
@@ -170,7 +174,8 @@ their penalties VoxelCharacterPlugin's; `WEATHER_SYSTEM.md` section 9 lists them
   (a game world without a provider: the defaults, SetWeather, the blend, the schedule, the lock, the export round trip,
   the wind), `Viewer.Precipitation` (the component's capture setup, inactive without a system, inactive when nothing
   falls), `Viewer.Player` (the ambience's shelter filter, the weightless lens without a material, a strike reaching the
-  lightning component and queuing thunder). The capture's rendering, the material's occlusion, the sounds and the lens
+  lightning component and queuing thunder), `Subsystem.MirrorInstances` (the instance targets: registration, the tick
+  write, unregistration, an instance gone), `Lightning.Bolt`. The capture's rendering, the material's occlusion, the sounds and the lens
   are seen in PIE (`Scripts/qa/weather_shots.py`), not tested headless.
 
 ## Console
