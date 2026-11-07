@@ -189,7 +189,8 @@ namespace WorldWeatherConsole
 		const float Distance = Args.Num() >= 1 ? FCString::Atof(*Args[0]) : 3000.0f;
 		FVector North, East;
 		UWorldWeatherMath::LocalFrame(Weather->GetClimateAt(Here).Up, North, East);
-		const float Angle = FMath::FRandRange(0.0f, UE_TWO_PI);
+		// A bearing in degrees from north toward east when given (a deterministic strike for a shot); random otherwise.
+		const float Angle = Args.Num() >= 2 ? FMath::DegreesToRadians(FCString::Atof(*Args[1])) : FMath::FRandRange(0.0f, UE_TWO_PI);
 		const FVector Place = Here + (North * FMath::Cos(Angle) + East * FMath::Sin(Angle)) * Distance;
 		Weather->Strike(Place);
 		UE_LOG(LogWorldWeather, Display, TEXT("ww.Strike: lightning at %s (%.0f uu from %s)."), *Place.ToCompactString(), Distance, Pawn ? TEXT("the pawn") : TEXT("the origin"));
@@ -230,7 +231,7 @@ static FAutoConsoleCommandWithWorldAndArgs GWorldWeatherWindCmd(
 
 static FAutoConsoleCommandWithWorldAndArgs GWorldWeatherStrikeCmd(
 	TEXT("ww.Strike"),
-	TEXT("A lightning strike near the pawn: ww.Strike [DistanceUU=3000] (this machine only)"),
+	TEXT("A lightning strike near the pawn: ww.Strike [DistanceUU=3000] [BearingDeg: from north toward east; random when omitted] (this machine only)"),
 	FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) { WorldWeatherConsole::Strike(Args, World); }));
 
 static FAutoConsoleCommandWithWorldAndArgs GWorldWeatherNextCmd(

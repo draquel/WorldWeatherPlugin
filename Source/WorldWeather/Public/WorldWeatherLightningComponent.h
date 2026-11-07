@@ -6,7 +6,9 @@
 #include "Components/SceneComponent.h"
 #include "WorldWeatherLightningComponent.generated.h"
 
+class UNiagaraComponent;
 class UNiagaraSystem;
+class UPointLightComponent;
 class UWorldWeatherAmbienceComponent;
 
 /**
@@ -26,6 +28,7 @@ public:
 
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 	/** The ambience the thunder goes to (the viewer's). */
 	void SetAmbience(UWorldWeatherAmbienceComponent* InAmbience) { Ambience = InAmbience; }
@@ -38,6 +41,25 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Weather")
 	FVector GetLastStrike() const { return LastStrike; }
 
+	/** Strike lights still fading (tests). */
+	int32 GetActiveLightCount() const { return Lights.Num(); }
+
+	/**
+	 * Pure: the strike light's intensity factor by its age, 1 at the strike falling as the square of the time left to 0
+	 * at Seconds and after.
+	 * @param Age     Seconds since the strike
+	 * @param Seconds LightningLightSeconds
+	 * @return The factor, 0..1
+	 */
+	static float FlashIntensity(float Age, float Seconds);
+
+	/**
+	 * Pure: the bolt's rotation at a strike: the system's +Z (the beam's length) along the local up.
+	 * @param Up The local up at the strike
+	 * @return The rotation
+	 */
+	static FRotator BoltRotation(const FVector& Up);
+
 protected:
 	UFUNCTION()
 	void OnStrike(FVector Location);
@@ -48,4 +70,14 @@ protected:
 	TWeakObjectPtr<UWorldWeatherAmbienceComponent> Ambience;
 	int32 StrikeCount = 0;
 	FVector LastStrike = FVector::ZeroVector;
+
+	/** A strike's light and its age; the component ticks while any is alive. */
+	struct FStrikeLight
+	{
+		TWeakObjectPtr<UPointLightComponent> Light;
+		/** The bolt, deactivated when the light has faded (it then completes and destroys itself). */
+		TWeakObjectPtr<UNiagaraComponent> Bolt;
+		float Age = 0.f;
+	};
+	TArray<FStrikeLight> Lights;
 };

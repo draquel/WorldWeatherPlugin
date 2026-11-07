@@ -7,6 +7,7 @@
 #include "WorldWeatherContentLibrary.generated.h"
 
 class UMaterialInterface;
+class UNiagaraEmitter;
 class UNiagaraSystem;
 
 /**
@@ -42,4 +43,22 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "WorldWeather|Content")
 	static FString DescribeSystem(UNiagaraSystem* System);
+
+	/**
+	 * The bolt (the foliage and bolt plan's L1, D69): an empty system gets a copy of the engine's StaticBeam emitter
+	 * template; every owned emitter is set to local space, its ribbon renderers take the bolt material, and the beam's
+	 * end is written into the emitter's baked module constants (a rapid-iteration parameter whose name contains
+	 * "Beam End") as BeamLength along the emitter's +Z, so the component orients the bolt along the local up at the
+	 * strike. A compile is requested. The report lists what was set and every constant found, so a template whose
+	 * names differ can be followed up.
+	 * @param System The system (new or already built; a second call changes the values again)
+	 * @param TemplateEmitter The emitter to copy in when the system has none (the engine's StaticBeam)
+	 * @param Material The ribbon material
+	 * @param BeamLength The bolt's length along +Z, uu (the cloud base's height above the strike)
+	 * @param BoltSeconds How long the beam's particles live and the emitter loops (a blink)
+	 * @param OutReport What was changed and the constants found
+	 * @return true when the system has an emitter with a ribbon renderer carrying the material
+	 */
+	UFUNCTION(BlueprintCallable, Category = "WorldWeather|Content")
+	static bool BuildLightningSystem(UNiagaraSystem* System, UNiagaraEmitter* TemplateEmitter, UMaterialInterface* Material, float BeamLength, float BoltSeconds, FString& OutReport);
 };
