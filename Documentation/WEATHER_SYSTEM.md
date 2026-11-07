@@ -186,7 +186,40 @@ both). Test `VoxelCharacter.Movement.WindPush`.
 The dedicated-server PIE test (`VoxelEngine.Replication.Framework`) gained a row: the server sets a storm, and the client
 reads the same sync point serial, preset and front within a sync interval. The hand-run QA plan gained an area, F12.
 
-## 9. Results
+## 9. Reactions (P5)
+
+What else in the game reads the weather (2026-11-07). Each piece is a consumer in its own plugin, bound by tag or by
+`GetConditionsAt`; this plugin gained nothing in P5.
+
+- **The save** (VoxelWorldSave): `FVoxelWorldSaveDocument.Weather` is `FWorldWeatherSaveState` (the sync point, the
+  schedule's place, the lock) beside `.Clock`; `BuildDocument` exports it through `ExportState`, `ApplyDocument` imports
+  it after the clock (the point is in clock seconds) when the document has one (a document from before the field has
+  no front tag and leaves the schedule alone). A loaded storm fires no change event (`ImportState` re-primes the
+  edges). `VoxelWorldSave.Document.RoundTrip` covers the field.
+- **The surface NPCs** (VoxelWorldPOI): a table entry's `bHidesInStorms` (the demo's deer) holds its creatures where
+  they are while the current preset is `Weather.Preset.Storm`: `UPOISurfaceNPCSubsystem` checks the preset every pass
+  (0.5 s) and pushes `AVCNPCCharacterBase::SetWeatherHold` to every alive creature of such an entry when the storm
+  starts or ends; a creature spawned into a storm holds from the start. In the AI, `FVCNPCAIDecisionInput::
+  bHoldsForWeather` turns a prey's roaming and patrolling into Idle; a threat still makes it flee; hostiles ignore it
+  (`VoxelCharacter.AI.WeatherHold`).
+- **The campsite's fire** (VoxelWorldPOI): visual only, every machine. `APOICampsite` reads the conditions at its light
+  every half second and sets the light to `LightIntensityLumens x FireGutter(rate x exposure)`, a steady loss of
+  `RainGutterFactor` (0.65) under full rain plus a flicker that grows with the rain; under a roof the exposure keeps it
+  steady (`VoxelWorlds.POI.Campsite.FireGutter`).
+- **The character's states** (VoxelCharacterPlugin): the movement component's weather read (P4) also keeps the air
+  temperature and a wet level, `AdvanceWetLevel`: the rain reaching the pawn (rate x exposure, snow at a third) soaks
+  it over `WetSoakSeconds` (12), a swim at once, and nothing falling dries it over `WetDrySeconds` (90). Every half
+  second the server (`AVCCharacterBase::UpdateWeatherEffects`) sets `State.Weather.Wet` (on at a wet level of 0.6,
+  off under 0.2) and `State.Weather.Cold` (on at 0 C, off over 2 C) as replicated loose tags on the ability system,
+  read back from it rather than kept on the body (a player's lives on the player state and outlives a respawn). Wet
+  halves the stamina's regeneration (`WetStaminaRegenMultiplier` in `TickStamina`); cold applies
+  `UVCWeatherColdEffect`, an infinite effect taking 0.15 off the move speed multiplier, removed by class when the
+  cold lifts. A corpse or a downed character loses both. The vitals widget shows "Soaked", "Cold" or "Soaked and cold"
+  from the tags' events; a change logs once, `vc.Weather.Log 1` the level and the temperature every half second
+  (`VoxelCharacter.Movement.WetLevel`).
+- **Music**: nothing. No music system exists; `OnWeatherChanged` and the tags are the hook a later one binds.
+
+## 10. Results
 
 ### P0 (2026-11-06): the plugin and the core
 
@@ -278,3 +311,18 @@ settings does, `EndPlay` on the world before the teardown); and a unity build me
 so a helper copied into a second file is a redefinition (`UWorldWeatherSettings::LoadIfPresent` is the one copy now).
 The suite is 20/20 with the weather, clock and character movement roots; the in-editor gate 27/27 with the parity
 lines unchanged. The wet grip is not measured here (F12-08 is the hand-run row).
+
+### P5 (2026-11-07): the reactions
+
+The save field, the deer's storm hold, the campsite fire's guttering and the character's wet and cold states of section
+9. Seen in PIE on `VoxelDemo` at the campsite (`vox.TPPOI Camp`; the player start is in the lake, where the pawn swims
+and is soaked at once, and the shore's shallows count as water to the terrain context, so the soak-at-once is tied to
+swimming, not to that flag): 45 s of rain soak the pawn (the state logs "soaked"), and under a clear sky the level
+falls 1.00, 0.78, 0.55, 0.33 at 20 s steps, "dry" at 0.10 and 0.00 at 100 s; a Rain front on the demo cools the air by
+5 C and a Snow front to -8, so the cold state comes and goes with them (on at 0 C, off at 2 C). Three deer spawned ad
+hoc wander; a Storm front holds seven creatures (the three and the planned ones in range), a listed deer's state Idle,
+and the Clear front releases them. The demo campsite's fire gutters under Rain (0.35 of the rain reaches it through its
+cover) and burns steady again under Clear. A Storm saved (`vox.Save`), PIE stopped and started, comes back as the same
+sync point (serial 11, its start at the same clock second) with no change event. The suite is 33/33 with the weather,
+clock, character movement and AI, campsite and save roots. Seen on the way: a planned deer at the demo's cell (-2,1)
+spawns at a point in deep water and is despawned the same pass, every pass (G139).

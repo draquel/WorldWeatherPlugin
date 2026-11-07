@@ -148,6 +148,12 @@
 - **The pawn** is the character plugin's: `UVCMovementComponent::ComputeWindDrift` and the wet grip, behind
   `WITH_WORLD_WEATHER` (optional there). Keep the push a lean: it runs inside the predicted movement on both machines.
 
+## Reactions (P5)
+Nothing here: the save field is VoxelWorldSave's (`FVoxelWorldSaveDocument.Weather`, imported after the clock), the
+deer's storm hold and the campsite fire's guttering VoxelWorldPOI's, the character's `State.Weather.Wet` / `Cold` and
+their penalties VoxelCharacterPlugin's; `WEATHER_SYSTEM.md` section 9 lists them. A new reaction binds
+`OnWeatherChanged` or reads `GetConditionsAt` from its own plugin; it does not come in here.
+
 ## Rules
 - Never read the authority's `Sync` on a client: every reader goes through `FindSync()` / the public getters, which
   resolve the replicated state's point.
