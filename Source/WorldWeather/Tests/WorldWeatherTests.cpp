@@ -19,6 +19,8 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/WorldSettings.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "NiagaraComponent.h"
 #include "WorldClockSubsystem.h"
 
@@ -665,6 +667,88 @@ bool FWorldWeatherLightningBoltTest::RunTest(const FString& Parameters)
 	const FRotator R = UWorldWeatherLightningComponent::BoltRotation(Up);
 	TestTrue(TEXT("The bolt's +Z is the local up"), FRotationMatrix(R).GetUnitAxis(EAxis::Z).Equals(Up, 1.0e-4));
 	TestTrue(TEXT("A zero up stands on world Z"), FRotationMatrix(UWorldWeatherLightningComponent::BoltRotation(FVector::ZeroVector)).GetUnitAxis(EAxis::Z).Equals(FVector::UpVector, 1.0e-4));
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The mirror table's instance targets (the foliage and bolt plan's D67): an entry naming an instance group writes its
+// source x scale + offset on every instance registered under the group each tick; registering twice is one; an
+// unregistered instance keeps its last value and takes no more; an instance gone is dropped.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldWeatherMirrorInstancesTest, "WorldWeather.Subsystem.MirrorInstances", WORLDWEATHER_TEST_FLAGS)
+bool FWorldWeatherMirrorInstancesTest::RunTest(const FString& Parameters)
+{
+	static const FName Group(TEXT("TestFoliageWind"));
+	static const FName Param(TEXT("Wind Intensity"));
+	const auto ScalarOf = [](const UMaterialInstanceDynamic* Instance, float& OutValue)
+	{
+		for (const FScalarParameterValue& P : Instance->ScalarParameterValues)
+		{
+			if (P.ParameterInfo.Name == Param)
+			{
+				OutValue = P.ParameterValue;
+				return true;
+			}
+		}
+		return false;
+	};
+
+	// The entry goes on the settings for the world's Initialize (where the table is resolved), then comes off again.
+	UWorldWeatherSettings* Settings = GetMutableDefault<UWorldWeatherSettings>();
+	const TArray<FWorldWeatherMirrorEntry> SavedTable = Settings->MirrorTable;
+	FWorldWeatherMirrorEntry& Entry = Settings->MirrorTable.AddDefaulted_GetRef();
+	Entry.InstanceGroup = Group;
+	Entry.Parameter = Param;
+	Entry.Source = EWorldWeatherMirrorSource::Precipitation;
+	Entry.Scale = 2.0f;
+	Entry.Offset = 0.25f;
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("WorldWeatherMirrorInstancesTest"));
+	Settings->MirrorTable = SavedTable;
+	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+	Context.SetCurrentWorld(World);
+	UWorldWeatherSubsystem* Weather = World->GetSubsystem<UWorldWeatherSubsystem>();
+	if (TestNotNull(TEXT("The game world has weather"), Weather))
+	{
+		UMaterialInterface* Parent = UMaterial::GetDefaultMaterial(MD_Surface);
+		UMaterialInstanceDynamic* A = UMaterialInstanceDynamic::Create(Parent, World);
+		UMaterialInstanceDynamic* B = UMaterialInstanceDynamic::Create(Parent, World);
+		UMaterialInstanceDynamic* Other = UMaterialInstanceDynamic::Create(Parent, World);
+		Weather->RegisterMirrorInstance(Group, A);
+		Weather->RegisterMirrorInstance(Group, A);
+		Weather->RegisterMirrorInstance(Group, B);
+		Weather->RegisterMirrorInstance(TEXT("NoEntryNamesThis"), Other);
+		TestEqual(TEXT("Two instances in the group (A twice is one)"), Weather->GetMirrorInstanceCount(Group), 2);
+		TestTrue(TEXT("ww.Weather names the group"), Weather->DescribeMirrorInstances().Contains(TEXT("TestFoliageWind: 2")));
+
+		Weather->SetWeather(WorldWeatherTags::Weather_Preset_Storm, 0.0f);
+		Weather->Tick(0.1f);
+		const float Expected = Weather->GetCurrentFront().Precipitation * 2.0f + 0.25f;
+		float ValueA = -1.0f, ValueB = -1.0f, ValueOther = -1.0f;
+		TestTrue(TEXT("A takes the entry's parameter"), ScalarOf(A, ValueA));
+		TestEqual(TEXT("... the source x scale + offset"), ValueA, Expected, 1.0e-5f);
+		TestTrue(TEXT("B too"), ScalarOf(B, ValueB) && FMath::IsNearlyEqual(ValueB, Expected, 1.0e-5f));
+		TestFalse(TEXT("A group no entry names is not written"), ScalarOf(Other, ValueOther));
+
+		// Unregistered: A keeps its value and takes no more; B follows the next front.
+		TestTrue(TEXT("Unregister A"), Weather->UnregisterMirrorInstance(Group, A));
+		TestFalse(TEXT("Unregister A again: not there"), Weather->UnregisterMirrorInstance(Group, A));
+		Weather->SetWeather(WorldWeatherTags::Weather_Preset_Clear, 0.0f);
+		Weather->Tick(0.1f);
+		const float ExpectedClear = Weather->GetCurrentFront().Precipitation * 2.0f + 0.25f;
+		ScalarOf(A, ValueA);
+		ScalarOf(B, ValueB);
+		TestEqual(TEXT("A keeps the storm's value"), ValueA, Expected, 1.0e-5f);
+		TestEqual(TEXT("B takes the clear front's"), ValueB, ExpectedClear, 1.0e-5f);
+		TestEqual(TEXT("One instance left"), Weather->GetMirrorInstanceCount(Group), 1);
+
+		// Gone: B is dropped (held weakly) and the next tick writes nothing.
+		B->MarkAsGarbage();
+		TestEqual(TEXT("B gone: none counted"), Weather->GetMirrorInstanceCount(Group), 0);
+		Weather->Tick(0.1f);
+		TestTrue(TEXT("The empty group reads empty"), Weather->DescribeMirrorInstances().Contains(TEXT("TestFoliageWind: 0")));
+	}
+	GEngine->DestroyWorldContext(World);
+	World->DestroyWorld(false);
 	return true;
 }
 

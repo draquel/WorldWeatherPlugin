@@ -91,6 +91,21 @@ to 0.3 (a closed ceiling) and density 0.006 to 0.12 (a dark ceiling); the defaul
 direction as a vector), and the mirror table writes the same sources into other collections (D64): VoxelWorlds' wind
 inputs in P3, a pack's own collection with no edit to the pack.
 
+The mirror table (`UWorldWeatherSettings::MirrorTable`, `FWorldWeatherMirrorEntry`): each entry is a source (an
+`EWorldWeatherMirrorSource`), a scale and an offset (the value written is source x scale + offset; a vector source,
+`WindDirection`, ignores both) and one of two target kinds, resolved at `Initialize`:
+
+- **A collection parameter** (`Collection`, `Parameter`): written through the world's collection instance every tick
+  (D64). A collection that is not installed is skipped with a Log line.
+- **An instance group** (`InstanceGroup`, `Parameter`; the foliage and bolt plan's D67): the entry names a group
+  instead of a collection, and the parameter is written on every material instance a game has registered under the
+  group, every tick (`RegisterMirrorInstance(Group, Instance)` / `UnregisterMirrorInstance`; `GetMirrorInstanceCount`).
+  The instances are held weakly, an instance gone is dropped at the next write, registering twice is one registration,
+  and an unregistered instance keeps its last value. For a material whose parameters are per instance and read no
+  collection: the Megascans foliage master's `Wind Intensity`, through the scatter's dynamic instances, which
+  VoxelWorldPOI's `UPOIWeatherBridge` registers under `FoliageWind` (section 7). `ww.Weather` prints each group with
+  its live instance count. Test `WorldWeather.Subsystem.MirrorInstances`.
+
 Each local player gets an `AWorldWeatherViewer` that follows the camera and carries a local fog volume (D62): the
 weather's fog about the viewer, on a planet too, where the clock hides the height fog; `ww.Viewer.Fog 0` turns it off.
 
@@ -146,11 +161,15 @@ viewer's `LocalCold` instead: one global front, snow on the tundra, the taiga an
 cold, rain on the meadow, at every LOD and on the far field alike), on the faces that look along the local up; the cross billboards' master leans
 the quad with `WindDirection` by `WindIntensity` and `GustFactor`; the sea's normal ripples along the wind by
 `RippleStrength`. The Spruce pack's foliage moves through its own `MPC_Global` (`Wind Intensity`, `Wind Direction`),
-two mirror entries, no edit to the pack. The Megascans foliage master keeps its own per-instance wind (a static switch
-and local scalars): its intensity does not follow the weather, which would take a material instance per scatter
-definition written through a named dynamic instance; those plants wait. The Megaplants' baked static meshes have no
-wind at all; their skinned assemblies are the scatter rendering slice the plan names, not a material input, and are not
-part of this phase.
+two mirror entries, no edit to the pack. The Megascans foliage master (`M_MS_Foliage_Material`) keeps its wind per
+instance (the engine's `SimpleGrassWind` behind the static switch `EnableGrassWind`, the scalars `Wind Intensity`,
+`Wind Height`, `Wind Speed`) and reads no collection; since F1 of the foliage and bolt plan (D67) it follows the weather
+through an instance group: the content script writes a material instance per plant with the switch on
+(`MI_<plant>_Wind`), the scatter draws each Megascans definition through one dynamic instance of it
+(`bDynamicMaterials`, VoxelWorlds' `SCATTER_SYSTEM.md` "Dynamic materials"), the bridge registers those under
+`FoliageWind`, and the mirror entries write `Wind Intensity` (and `Wind Speed`) from the front's wind (section 10, F1).
+The Megaplants' baked static meshes have no wind at all; their skinned assemblies are the scatter rendering slice the
+plan names (F2, F3), not a material input.
 
 ## 8. The player (P4)
 
@@ -353,14 +372,40 @@ mode is not one of them, so the component also deactivates the system when its l
 with the weather root. Seen on the way: a strike's point light at 3 m with a flat falloff lights the nearest trunks to
 white; the place for it is up the bolt.
 
+### F1 (2026-11-07): the Megascans foliage's wind (the foliage and bolt plan, D67)
+
+Four pieces, each in the plugin that owns it. VoxelWorlds' scatter gained `FScatterDefinition::bDynamicMaterials`: the
+renderer draws such a definition's override slots through one dynamic instance each, shared by its components in every
+region, and the manager publishes them (`GetDynamicMaterials`, `GetAllDynamicMaterials`, `OnDynamicMaterialCreated`,
+`OnDynamicMaterialReleased` at its shutdown). This plugin's mirror table gained the instance target (section 5:
+`InstanceGroup`, `RegisterMirrorInstance`). VoxelWorldPOI's `UPOIWeatherBridge` binds the chunk manager's scatter and
+registers its instances under `FoliageWind`. `Scripts/setup_smooth_terrain.py` writes `MI_<plant>_Wind` (parent the
+plant's `MI_<plant>_2K`, `EnableGrassWind` on) in a `Wind` folder beside it in the pack, one for each slot on the
+foliage master (the plant's and, where its billboard is on the same master, the billboard's: 41 instances for the
+table's 33 Megascans plants), and draws the 76 Megascans definitions of each smooth world (of 108) through them with
+`bDynamicMaterials`; `Config/DefaultGame.ini`'s entry writes `Wind Intensity` = `WindIntensity` x 0.3: 0 in a calm,
+the pack's authored 0.15 at half of `StrongWindAbove` (300 uu/s), 0.3 in a strong wind or a storm. `Wind Speed` and
+`Wind Height` keep the pack's 0.5: the sway's rate read right at every intensity, so no entry drives them.
+
+Seen in PIE on `SmoothTerrain_Planet` at 20 N 20 E (a shallow marsh of swamp grass, reeds and marshcress;
+`Scripts/qa/wind_shots.py`: the clock stopped, the pawn frozen, the precipitation off, a still camera at the pawn
+pitched 30 degrees down, two shots a second apart per pair): `ww.Weather` lists `FoliageWind: 32` (the bridge bound
+before the scatter made any, the delegate registered each). The mean absolute luma difference between the two shots
+(of 255) is 0.95 over the frame in a calm (`ww.Wind 0 0`), 3.97 under the Windy front (800 uu/s, intensity 0.3), and
+1.01 in the calm again; the pixels that moved more than 8 are 0.8 %, 11.0 % and 2.1 %. The windy pair's difference
+image is the plants' silhouettes, blade by blade, and the calm pairs' only the shallow water's shimmer (its ripples)
+and a faint upscaler outline: the plants stand still at zero wind and settle when it drops. The suites: the weather 13/13
+(`WorldWeather.Subsystem.MirrorInstances` new), VoxelWorlds 498/498 (`VoxelWorlds.Scatter.DynamicMaterials`,
+`VoxelWorlds.POI.WeatherBridge.ScatterWind` new); the in-editor gate 28/28 with `DynamicMaterials` added, the parity
+lines unchanged. The wind instances' shaders compile on the first editor load after the script (the foliage master's
+switch-on permutation per instance).
+
 ## 11. Later
 
 What the plan named and left, and what the phases found, in one list (2026-11-07):
 
 - **The Megaplants' skinned assemblies** (P3's slice): their baked static meshes have no wind; moving them is a
   scatter rendering slice of its own.
-- **The Megascans foliage's wind intensity**: a static switch and per-instance scalars in the pack's master; driving it
-  takes a project material instance per scatter definition, written through a named dynamic instance.
 - **A lean against the wind**: the pawn's motion is slowed and helped, nothing shows it; the animation layer can read
   `UVCMovementComponent::GetWeatherWind`.
 - **The campfire's flame**: the fire gutters as its light only; it has no flame particles to thin.
