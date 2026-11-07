@@ -93,6 +93,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "WorldWeather|Math")
 	static float TemperatureC(float Temperature01, float ColdC, float HotC, float Daylight, float NightCoolingC, float FrontOffsetC);
 
+	/**
+	 * The climate temperature (0..1) at which it snows: SnowBelowC inverted through the linear map (the materials compare a
+	 * biome's mid temperature against it; the mirror source FreezeLevel). 0 when the map is degenerate.
+	 */
+	UFUNCTION(BlueprintPure, Category = "WorldWeather|Math")
+	static float FreezeLevel(float ColdC, float HotC, float SnowBelowC);
+
 	/** What falls: nothing at rate 0; snow at or under SnowBelowC, sleet within SleetBandC over it, rain above. */
 	UFUNCTION(BlueprintPure, Category = "WorldWeather|Math")
 	static EWorldWeatherPrecipitation PrecipitationType(float InTemperatureC, float Rate, float SnowBelowC, float SleetBandC);

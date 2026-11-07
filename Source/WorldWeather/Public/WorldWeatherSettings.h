@@ -49,6 +49,12 @@ enum class EWorldWeatherMirrorSource : uint8
 	LightningFlash,
 	/** A vector: the wind direction at the local viewer (unit, tangent to the up) with the speed in W */
 	WindDirection,
+	/** The front's wind azimuth, degrees from north toward east (a pack's scalar wind direction; Scale and Offset turn it into the pack's convention) */
+	WindAzimuth,
+	/** The climate temperature (0..1) at which precipitation is snow (the settings' SnowBelowC through their map): the materials' snow line against a biome's temperature */
+	FreezeLevel,
+	/** The cold factor at the local viewer (1 at or under SnowBelowC, 0 a sleet band above it): the materials' snow where a biome's range says nothing */
+	ColdFactor,
 };
 
 /** One parameter of one collection the weather writes every tick: Source x Scale + Offset (a vector source ignores both). */
