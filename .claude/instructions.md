@@ -143,8 +143,9 @@
 - **The lens** (`UWorldWeatherLensComponent`): an unbound post-process component with a dynamic instance of
   `LensMaterial` (`M_WeatherLens`, scalars Drops, Frost, Wet) as its one blendable; the weight blends with `FInterpTo`
   and is 0 when nothing shows. `ww.Viewer.Lens 0|1`.
-- **Lightning** (`UWorldWeatherLightningComponent`): bound to `OnLightning`; the settings' `LightningSystem` at the strike
-  when named (none is), the thunder handed to the ambience.
+- **Lightning** (`UWorldWeatherLightningComponent`): bound to `OnLightning`; the bolt `NS_WeatherLightning` spawned at the
+  strike along the local up (the content library builds it from the engine's `StaticBeam` template; L1 of the foliage and
+  bolt plan), a point light fading over `LightningLightSeconds`, the thunder handed to the ambience.
 - **The pawn** is the character plugin's: `UVCMovementComponent::ComputeWindDrift` and the wet grip, behind
   `WITH_WORLD_WEATHER` (optional there). Keep the push a lean on the pawn's own motion and on a fall, never a shove of
   a standing pawn: it runs inside the predicted movement on both machines.
@@ -176,7 +177,7 @@ their penalties VoxelCharacterPlugin's; `WEATHER_SYSTEM.md` section 9 lists them
 - `ww.Weather` (the present preset and blend, the front, the sky controller and viewers and the sky-write cost, the
   accumulators, the next draw, the conditions where the pawn stands, the providers and the climate there, each viewer's
   precipitation and captures), `ww.Set <Preset|Weather.Preset.X> [BlendSeconds]` (authority; no argument lists the presets), `ww.Lock 0|1`,
-  `ww.Wind <Azimuth> <Speed>`, `ww.Strike [Distance]` (this machine), `ww.Next`; the cvars `ww.Viewer.Fog 0|1`
+  `ww.Wind <Azimuth> <Speed>`, `ww.Strike [Distance] [BearingDeg]` (this machine; a bearing puts the strike where a camera looks), `ww.Next`; the cvars `ww.Viewer.Fog 0|1`
   (`WorldWeatherViewer.cpp`), `ww.Viewer.Precipitation 0|1`, `ww.Viewer.Occlusion 0|1`, `ww.Occlusion.Frames N`
   (`WorldWeatherPrecipitationComponent.cpp`), `ww.Viewer.Audio 0|1` (`WorldWeatherAmbienceComponent.cpp`),
   `ww.Viewer.Lens 0|1` (`WorldWeatherLensComponent.cpp`). Registered in `WorldWeatherConsole.cpp`;

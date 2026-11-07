@@ -4,10 +4,13 @@
 #include "WorldWeatherEditor.h"
 
 #include "Materials/MaterialInterface.h"
+#include "NiagaraEditorUtilities.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraEmitterHandle.h"
 #include "NiagaraMeshRendererProperties.h"
 #include "NiagaraRendererProperties.h"
+#include "NiagaraRibbonRendererProperties.h"
+#include "NiagaraScript.h"
 #include "NiagaraSpriteRendererProperties.h"
 #include "NiagaraSystem.h"
 
@@ -115,4 +118,142 @@ FString UWorldWeatherContentLibrary::DescribeSystem(UNiagaraSystem* System)
 	}
 	Out += TEXT("\n");
 	return Out;
+}
+
+namespace
+{
+	/** Every script an emitter runs (the emitter and particle spawn and update), for its baked module constants. */
+	TArray<UNiagaraScript*> EmitterScripts(FVersionedNiagaraEmitterData& Data)
+	{
+		TArray<UNiagaraScript*> Out;
+		for (UNiagaraScript* Script : { Data.EmitterSpawnScriptProps.Script.Get(), Data.EmitterUpdateScriptProps.Script.Get(),
+			Data.SpawnScriptProps.Script.Get(), Data.UpdateScriptProps.Script.Get() })
+		{
+			if (Script)
+			{
+				Out.AddUnique(Script);
+			}
+		}
+		return Out;
+	}
+
+	/** Sets every rapid-iteration float constant whose name contains Needle to Value, in every script of the emitter. */
+	int32 SetFloatConstant(FVersionedNiagaraEmitterData& Data, const FString& Needle, float Value, FString& OutReport)
+	{
+		int32 Set = 0;
+		for (UNiagaraScript* Script : EmitterScripts(Data))
+		{
+			TArray<FNiagaraVariable> Parameters;
+			Script->RapidIterationParameters.GetParameters(Parameters);
+			for (const FNiagaraVariable& Parameter : Parameters)
+			{
+				if (Parameter.GetName().ToString().Contains(Needle) && Parameter.GetType() == FNiagaraTypeDefinition::GetFloatDef())
+				{
+					Script->Modify();
+					Script->RapidIterationParameters.SetParameterData(reinterpret_cast<const uint8*>(&Value), Parameter);
+					++Set;
+					OutReport += FString::Printf(TEXT("  set %s = %.2f\n"), *Parameter.GetName().ToString(), Value);
+				}
+			}
+		}
+		return Set;
+	}
+
+	/**
+	 * Sets every rapid-iteration vector constant whose name contains Needle to Value (a position or a vector3), in
+	 * every script of the emitter; returns how many it set.
+	 */
+	int32 SetBeamConstant(FVersionedNiagaraEmitterData& Data, const FString& Needle, const FVector3f& Value, FString& OutReport)
+	{
+		int32 Set = 0;
+		for (UNiagaraScript* Script : EmitterScripts(Data))
+		{
+			TArray<FNiagaraVariable> Parameters;
+			Script->RapidIterationParameters.GetParameters(Parameters);
+			for (const FNiagaraVariable& Parameter : Parameters)
+			{
+				if (!Parameter.GetName().ToString().Contains(Needle))
+				{
+					continue;
+				}
+				const FNiagaraTypeDefinition Type = Parameter.GetType();
+				if (Type == FNiagaraTypeDefinition::GetPositionDef() || Type == FNiagaraTypeDefinition::GetVec3Def())
+				{
+					Script->Modify();
+					Script->RapidIterationParameters.SetParameterData(reinterpret_cast<const uint8*>(&Value), Parameter);
+					++Set;
+					OutReport += FString::Printf(TEXT("  set %s = (%.0f, %.0f, %.0f)\n"), *Parameter.GetName().ToString(), Value.X, Value.Y, Value.Z);
+				}
+			}
+		}
+		return Set;
+	}
+}
+
+bool UWorldWeatherContentLibrary::BuildLightningSystem(UNiagaraSystem* System, UNiagaraEmitter* TemplateEmitter, UMaterialInterface* Material, float BeamLength, float BoltSeconds, FString& OutReport)
+{
+	OutReport.Reset();
+	if (!System || !Material)
+	{
+		OutReport = TEXT("no system or no material");
+		return false;
+	}
+	if (System->GetEmitterHandles().Num() == 0)
+	{
+		if (!TemplateEmitter)
+		{
+			OutReport = TEXT("an empty system and no template emitter");
+			return false;
+		}
+		System->Modify();
+		FNiagaraEditorUtilities::AddEmitterToSystem(*System, *TemplateEmitter, TemplateEmitter->GetExposedVersion().VersionGuid, /*bCreateCopy=*/true);
+		OutReport += FString::Printf(TEXT("added a copy of %s\n"), *TemplateEmitter->GetPathName());
+	}
+	bool bRibbon = false;
+	for (FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
+	{
+		UNiagaraEmitter* Emitter = Handle.GetInstance().Emitter;
+		FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData();
+		if (!Emitter || !Data)
+		{
+			OutReport += FString::Printf(TEXT("%s: no emitter data\n"), *Handle.GetName().ToString());
+			continue;
+		}
+		if (!Emitter->IsIn(System))
+		{
+			OutReport += FString::Printf(TEXT("%s: the emitter %s is not the system's own; left alone\n"), *Handle.GetName().ToString(), *Emitter->GetPathName());
+			continue;
+		}
+		Emitter->Modify();
+		Data->bLocalSpace = true;
+		for (UNiagaraRendererProperties* Renderer : Data->GetRenderers())
+		{
+			if (UNiagaraRibbonRendererProperties* Ribbon = Cast<UNiagaraRibbonRendererProperties>(Renderer))
+			{
+				Ribbon->Modify();
+				Ribbon->Material = Material;
+				bRibbon = true;
+				OutReport += FString::Printf(TEXT("%s: ribbon renderer -> %s\n"), *Handle.GetName().ToString(), *Material->GetPathName());
+			}
+		}
+		const int32 Ends = SetBeamConstant(*Data, TEXT("Beam End"), FVector3f(0.f, 0.f, BeamLength), OutReport);
+		const int32 Starts = SetBeamConstant(*Data, TEXT("Beam Start"), FVector3f::ZeroVector, OutReport);
+		// A bolt is a blink: the beam's particles live BoltSeconds and the emitter loops no longer (the component also
+		// deactivates the system when its light has faded, whatever the template's loop mode).
+		const int32 Lives = SetFloatConstant(*Data, TEXT("InitializeParticle.Lifetime"), BoltSeconds, OutReport)
+			+ SetFloatConstant(*Data, TEXT("EmitterState.Loop Duration"), BoltSeconds, OutReport);
+		OutReport += FString::Printf(TEXT("%s: local space; beam constants set: %d end(s), %d start(s), %d lifetime(s)\n"), *Handle.GetName().ToString(), Ends, Starts, Lives);
+		// Every constant, for the follow-up when the template's names differ.
+		for (UNiagaraScript* Script : EmitterScripts(*Data))
+		{
+			TArray<FNiagaraVariable> Parameters;
+			Script->RapidIterationParameters.GetParameters(Parameters);
+			for (const FNiagaraVariable& Parameter : Parameters)
+			{
+				OutReport += FString::Printf(TEXT("    constant %s : %s\n"), *Parameter.GetName().ToString(), *Parameter.GetType().GetName());
+			}
+		}
+	}
+	System->RequestCompile(/*bForce=*/true);
+	return bRibbon;
 }

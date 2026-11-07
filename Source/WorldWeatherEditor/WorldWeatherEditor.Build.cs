@@ -23,6 +23,7 @@ public class WorldWeatherEditor : ModuleRules
 				"UnrealEd",
 				// The content library edits Niagara systems' emitters and renderers (the precipitation systems built from the pack's).
 				"Niagara",
+				"NiagaraEditor",   // FNiagaraEditorUtilities::AddEmitterToSystem (the bolt)
 				"WorldWeather",
 			}
 		);

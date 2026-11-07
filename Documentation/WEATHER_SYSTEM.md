@@ -171,9 +171,16 @@ Three more components on the viewer, fed the conditions at the camera every tick
   exposure times how far up the camera looks (none below the horizon, fewer in snow), `Frost` the cold factor at the view,
   `Wet` the ground's wetness; the inputs and the blend weight move with `FInterpTo` at `LensBlendSpeed`, and the weight is
   exactly 0 when nothing shows, so a clear day costs no pass. `ww.Viewer.Lens 0` turns it off.
-- **`UWorldWeatherLightningComponent`**: bound to the subsystem's `OnLightning`; it spawns the settings' `LightningSystem`
-  at the strike's place when one is named (none is: the flash is the sky's, through the clock controller's slot) and hands
-  the thunder to the ambience with the strike's distance from the viewer.
+- **`UWorldWeatherLightningComponent`**: bound to the subsystem's `OnLightning`; at a strike it spawns the settings'
+  `LightningSystem` (`NS_WeatherLightning`, the bolt: the foliage and bolt plan's L1) at the strike's place, its +Z along
+  the local up there, so the beam stands from the ground to `CloudBaseHeight` above it; adds a point light a little above
+  the strike (`LightningLightLumens`, `LightningLightRadius`, `LightningLightColor`) that fades as the square of the time
+  left over `LightningLightSeconds` (`FlashIntensity`, pure; the component ticks only while a light fades); and hands the
+  thunder to the ambience with the strike's distance from the viewer. The flash in the sky is the clock controller's
+  slot, as before. The bolt system is built by `configure_weather.py` through the editor module's
+  `BuildLightningSystem`: an empty system gets a copy of the engine's `StaticBeam` emitter template, local space, the
+  ribbon on `M_WeatherLightning` (unlit, additive, the particle colour bright), and the beam's end written into the
+  emitter's baked module constants as `CloudBaseHeight` along +Z (`WorldWeather.Lightning.Bolt`).
 
 The character plugin reads the weather for the pawn (`UVCMovementComponent`, behind `WITH_WORLD_WEATHER`: the plugin is
 optional to it): `UpdateVoxelTerrainContext` reads `GetConditionsAt(pawn)` with the terrain context (every 0.1 s) and
@@ -331,6 +338,21 @@ sync point (serial 11, its start at the same clock second) with no change event.
 clock, character movement and AI, campsite and save roots. Seen on the way: a planned deer at the demo's cell (-2,1)
 spawns at a point in deep water and is despawned the same pass, every pass (G139).
 
+### L1 (2026-11-07): the bolt (the foliage and bolt plan, D69)
+
+`NS_WeatherLightning` from the engine's `StaticBeam` emitter template through `BuildLightningSystem`, `M_WeatherLightning`
+(the beam jagged by a lateral offset per segment along the ribbon, flickering, bright at the core, fading at both ends),
+the strike light and the bolt's frame in the lightning component. Seen in PIE on `VoxelDemo` at the campsite at night
+under a Storm, with `ww.Strike 1500 <bearing>` (the command gained a bearing so a strike can be put in front of a
+camera) at the four cardinal bearings: a jagged white-blue bolt stands from the ground to the cloud base at each, the
+near spruces lit by the strike light without whiting out (250,000 lumens with an inverse-square falloff, 12 m up the
+bolt; 30,000 lumens 3 m up with a flat falloff had whited the whole frame), and the bolt, there at 0.3 and 0.5 s, is gone by 0.7 s (the particles live 0.25 s, the light fades over 0.4 s and the system is deactivated with it). The emitter's
+module constants are reachable by name through the scripts' rapid-iteration parameter stores (`Beam End`,
+`Lifetime`, `Loop Duration`), which is how the library tunes a template without the stack API; the template's loop
+mode is not one of them, so the component also deactivates the system when its light has faded. The suite is 12/12
+with the weather root. Seen on the way: a strike's point light at 3 m with a flat falloff lights the nearest trunks to
+white; the place for it is up the bolt.
+
 ## 11. Later
 
 What the plan named and left, and what the phases found, in one list (2026-11-07):
@@ -339,7 +361,6 @@ What the plan named and left, and what the phases found, in one list (2026-11-07
   scatter rendering slice of its own.
 - **The Megascans foliage's wind intensity**: a static switch and per-instance scalars in the pack's master; driving it
   takes a project material instance per scatter definition, written through a named dynamic instance.
-- **A bolt**: `LightningSystem` is named by nothing; the flash and the thunder carry a strike.
 - **A lean against the wind**: the pawn's motion is slowed and helped, nothing shows it; the animation layer can read
   `UVCMovementComponent::GetWeatherWind`.
 - **The campfire's flame**: the fire gutters as its light only; it has no flame particles to thin.

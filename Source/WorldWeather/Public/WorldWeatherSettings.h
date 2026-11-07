@@ -409,6 +409,30 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Lightning")
 	TSoftObjectPtr<UNiagaraSystem> LightningSystem;
 
+	/** The cloud base's height above a strike, uu: the bolt's length along the local up (the content script bakes it into the system). */
+	UPROPERTY(Config, EditAnywhere, Category = "Lightning", meta = (ClampMin = "100"))
+	float CloudBaseHeight = 4000.0f;
+
+	/** The point light at a strike (lumens, inverse-square falloff), decaying over LightningLightSeconds; 0 = no light. */
+	UPROPERTY(Config, EditAnywhere, Category = "Lightning", meta = (ClampMin = "0"))
+	float LightningLightLumens = 250000.0f;
+
+	/** The strike light's attenuation radius, uu. */
+	UPROPERTY(Config, EditAnywhere, Category = "Lightning", meta = (ClampMin = "100"))
+	float LightningLightRadius = 10000.0f;
+
+	/** How high above the strike the light sits along the local up, uu: up the bolt, so the ground is lit evenly and nothing stands inside it. */
+	UPROPERTY(Config, EditAnywhere, Category = "Lightning", meta = (ClampMin = "0"))
+	float LightningLightHeight = 1200.0f;
+
+	/** The strike light's colour. */
+	UPROPERTY(Config, EditAnywhere, Category = "Lightning")
+	FLinearColor LightningLightColor = FLinearColor(0.75f, 0.82f, 1.0f);
+
+	/** Real seconds the strike light takes to fade. */
+	UPROPERTY(Config, EditAnywhere, Category = "Lightning", meta = (ClampMin = "0.05"))
+	float LightningLightSeconds = 0.4f;
+
 	/** The rules the pure resolution uses, from the values above. */
 	FWorldWeatherRules MakeRules() const;
 

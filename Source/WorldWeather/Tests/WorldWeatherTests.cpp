@@ -650,6 +650,24 @@ bool FWorldWeatherPlayerComponentsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// The bolt (the foliage and bolt plan's L1): the strike light's fade and the bolt's frame, pure.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldWeatherLightningBoltTest, "WorldWeather.Lightning.Bolt", WORLDWEATHER_TEST_FLAGS)
+bool FWorldWeatherLightningBoltTest::RunTest(const FString& Parameters)
+{
+	TestEqual(TEXT("Full at the strike"), UWorldWeatherLightningComponent::FlashIntensity(0.f, 0.5f), 1.f, 1.0e-6f);
+	TestEqual(TEXT("A quarter at half the time"), UWorldWeatherLightningComponent::FlashIntensity(0.25f, 0.5f), 0.25f, 1.0e-6f);
+	TestEqual(TEXT("Out at the end"), UWorldWeatherLightningComponent::FlashIntensity(0.5f, 0.5f), 0.f, 1.0e-6f);
+	TestEqual(TEXT("Out after"), UWorldWeatherLightningComponent::FlashIntensity(2.f, 0.5f), 0.f, 1.0e-6f);
+	TestEqual(TEXT("A zero duration does not divide"), UWorldWeatherLightningComponent::FlashIntensity(0.1f, 0.f), 0.f, 1.0e-6f);
+	const FVector Up = FVector(0.3, -0.4, 0.866).GetSafeNormal();
+	const FRotator R = UWorldWeatherLightningComponent::BoltRotation(Up);
+	TestTrue(TEXT("The bolt's +Z is the local up"), FRotationMatrix(R).GetUnitAxis(EAxis::Z).Equals(Up, 1.0e-4));
+	TestTrue(TEXT("A zero up stands on world Z"), FRotationMatrix(UWorldWeatherLightningComponent::BoltRotation(FVector::ZeroVector)).GetUnitAxis(EAxis::Z).Equals(FVector::UpVector, 1.0e-4));
+	return true;
+}
+
 #undef WORLDWEATHER_TEST_FLAGS
 
 #endif // WITH_DEV_AUTOMATION_TESTS
