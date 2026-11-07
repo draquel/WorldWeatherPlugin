@@ -142,10 +142,26 @@ collection and `DA_WeatherPresets` in the plugin's Content, named by `Config/Def
 settings live for tuning). Seen on `VoxelDemo` with the camera at the pawn: Clear a blue sky with cumulus, Overcast a
 broken grey sky with the ground dimmer (luma 97 to 94 of 255), Storm a closed grey ceiling with haze and the ground
 at 92, Fog cumulus through a white haze (the height fog's density scale); a strike lifts the whole frame by 16. On `PlanetTest`
-from 30 degrees north a storm dims the ground (luma 138 to 115) but no fog shows: the local fog volume renders nothing in this
-project, in PIE or in the editor world, the engine's own actor included (G134, `Documentation/FINDINGS.md`); the viewer keeps
-its component so a fix lights it with no plugin change, and until then a planet has no weather fog. The sky, collection and
-mirror writes cost 0.013-0.032 ms a tick (0.02 average), under the plan's 0.05.
+from 30 degrees north a storm dims the ground (luma 138 to 115) but no fog showed: the local fog volume rendered nothing
+(G134, fixed below). The sky, collection and mirror writes cost 0.013-0.032 ms a tick (0.02 average), under the plan's 0.05.
+
+### G134 (2026-11-07): the local fog volume
+
+The viewer's local fog volume drew nothing, in PIE or in the editor world, the engine's own `ALocalFogVolume` included, with
+every project setting and renderer cvar ruled out. The editor's `DumpGPU` showed the renderer doing its whole job: the
+culling pass listed the volume in every tile, the tiled draw ran, and the scene colour was byte-identical before and after
+it; `r.LocalFogVolume.TileDebug 1` painted every tile. The pixel shader's contribution was the identity because the engine
+combines the volume's radial and height densities as coverages, `T = 1 - (1 - TR) * (1 - TH)`
+(`LocalFogVolumeCommon.ush`, `LocalFogVolumeEvaluateAnalyticalIntegral`): with the height extinction at 0 the
+transmittance is 1 whatever the radial extinction. The viewer zeroed `HeightFogExtinction` in its constructor ("the sphere
+does it"), and every probe, the engine actor's included, copied that; a height extinction of 1 fogged the view at once. The
+volume now carries the weather's density in the height term (`LocalFogExtinctionMax`, per metre, uniform across the sphere
+at falloff 1; default 0.02, about 50 m of visibility) and a dense radial term (100) as the sphere's soft edge, both 0 when
+the front has no fog. Seen in PIE on `VoxelDemo` with a 500 m sphere about the camera: 0.02 hides the far shore and the
+trees fade within 50 m, 0.005 is a light haze. `weather_shots.py --map=planet "--pre=vox.TPLatLon 30 20" --presets=Clear,Fog`:
+on `PlanetTest` the Fog preset now greys the sky (luma 74 to 111) and dims the ground (145 to 119) with the trees fading
+into it, the GPU frame 4.00 to 4.24 ms; on `VoxelDemo` the sky goes 103 to 120 (the height fog's scale and the volume
+together). Found and fixed 2026-11-07 (the parent's `Documentation/FINDINGS.md`, G134 closed).
 
 ### P2 (2026-11-06): climate, shelter and precipitation
 
