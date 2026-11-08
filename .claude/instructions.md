@@ -1,6 +1,6 @@
 # WorldWeatherPlugin — Claude instructions
 
-> State as of 2026-11-07 (P0-P6 of the weather system plan, closed). This file is the plugin's reference with
+> State as of 2026-11-08 (P0-P6 of the weather system plan, closed; the foliage and bolt plan's L1, F1 and F3, closed). This file is the plugin's reference with
 > `Documentation/WEATHER_SYSTEM.md` (section 10 the results per phase, 11 what is left); its design record is the
 > parent project's `Documentation/WEATHER_SYSTEM_PLAN.md` (D58-D66, phases P0-P6; frozen).
 
