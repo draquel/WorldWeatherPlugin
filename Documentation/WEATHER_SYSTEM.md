@@ -168,8 +168,9 @@ through an instance group: the content script writes a material instance per pla
 (`MI_<plant>_Wind`), the scatter draws each Megascans definition through one dynamic instance of it
 (`bDynamicMaterials`, VoxelWorlds' `SCATTER_SYSTEM.md` "Dynamic materials"), the bridge registers those under
 `FoliageWind`, and the mirror entries write `Wind Intensity` (and `Wind Speed`) from the front's wind (section 10, F1).
-The Megaplants' baked static meshes have no wind at all; their skinned assemblies are the scatter rendering slice the
-plan names (F2, F3), not a material input.
+The Megaplants have no wind in their material: since F3 of the foliage and bolt plan (D68) the scatter instances their
+skeletal growth stages skinned, and the engine's Dynamic Wind animates their bones on the GPU from the parameters
+VoxelWorldPOI's bridge feeds it from the wind at the viewer every tick (section 10, F3), not through a material input.
 
 ## 8. The player (P4)
 
@@ -400,12 +401,87 @@ and a faint upscaler outline: the plants stand still at zero wind and settle whe
 lines unchanged. The wind instances' shaders compile on the first editor load after the script (the foliage master's
 switch-on permutation per instance).
 
+### F3 (2026-11-08): the Megaplants (the foliage and bolt plan, D68)
+
+Three pieces, each in the plugin that owns it. VoxelWorlds' scatter gained skeletal definitions
+(`FScatterDefinition::SkeletalMesh`; its `SCATTER_SYSTEM.md`, "Skeletal definitions"): one
+`UInstancedSkinnedMeshComponent` per definition and region with the Dynamic Wind plugin's `UDynamicWindData` provider,
+made with no tick, its stage and assembly parts loaded ahead asynchronously as the definitions load, instances added
+and removed by id through the HISMs' queue and releases; everything before the renderer is a static definition's.
+VoxelWorldPOI's `UPOIWeatherBridge` feeds the engine's `UDynamicWindSubsystem::UpdateWindParameters` every tick on a
+machine with a local viewer (`FeedDynamicWind`; a dedicated server feeds nothing): centred on the viewer actor, the
+extents the skeletal definitions' largest spawn distance (25,000 uu on `SmoothTerrain_Planet`: the junipers' scatter
+radius), the direction of the wind at the viewer. **The mapping**: the wind's strength at the viewer (the gust folded
+in) is 0 under this plugin's `CalmWindBelow` (150 uu/s: a calm, the plants at rest), 1 at `StrongWindAbove` (600: a
+strong wind or a storm), linear between; the Dynamic Wind's speed is `DynamicWindSpeedScale` (15, the spike's clear
+motion) and its amplitude `DynamicWindAmplitudeScale` (1) times it, both config on the bridge (`DefaultGame.ini`). The
+engine's provider in 5.8 reads only the direction, speed and amplitude: it animates each skeleton once per direction
+slice for every instance (F2), and the centre and extents are fed for a provider that will use them. The content
+script names the Megaplants' skeletal stages in both smooth worlds' flora (30 skeletal definitions each, with no
+collision: G149, the junipers lost their bakes'), `bake_megaplants.py` and the game module's bake library are gone,
+and the project enables `DynamicWind` by name.
+
+Seen in PIE on `SmoothTerrain_Planet` at F2's Meadow site, the frame-difference method (`Scripts/qa/wind_shots.py`:
+the clock stopped, the pawn frozen, the precipitation off, two shots a second apart; a fourth pair under the same front
+with the Dynamic Wind held still by the engine's `DynamicWind.OverrideAmplitude 0`, given 6 s for its 0.5 a second
+blend, separates the Megaplants' motion from the Megascans plants'). The scatter draws the 5,146 heather instances F2
+counted in 36 skinned components, none ticking, the provider loaded (`voxel.Scatter.Skinned`). Over one heather bush
+with no grass across it, the mean absolute luma difference (of 255) and the share of its pixels that moved more than 8:
+
+| Pair | The bush | The whole frame | The bridge fed |
+|---|---|---|---|
+| Calm (`ww.Wind 0 0`) | 3.74, 14.8 % | 1.24 | speed 0, amplitude 0 |
+| The Windy front (800 uu/s, gust 0.7) | 7.53, 29.0 % | 4.47 | speed 12.2, amplitude 0.81 |
+| The same, the Dynamic Wind held still | 3.43, 14.1 % | 4.27 | (as above, overridden) |
+| Calm again | 3.40, 14.2 % | 0.75 | speed 0, amplitude 0 |
+
+The calm pairs' floor on the bush is the temporal upscaler's speckle on its fine flowers; the windy pair's difference
+image is the bush's silhouette, and with the Dynamic Wind held still it drops back to the floor while the grass around
+it still sways (the frame 4.27): the heather moves with the front through the bridge, and stands still in a calm. Near
+and far (`Scripts/qa/megaplant_shots.py`), the shrubs are the bakes' plants in the same places with the same shading
+(F2's shots beside them), whole with their twigs and flowers near, fading out in the shrubs' band far.
+
+**F2's two conditions.** (b) The SM5 path (the editor with `-dx11`: D3D11, SM5, no Nanite) draws the plants, from the
+stages' non-Nanite fallback meshes (coarser leaf cards and a darker pink than Nanite's, as any Nanite asset's fallback
+on that path), and moves them: the bush 1.20 (0.3 %) calm, 2.63 (8.6 %) under the Windy front, 0.98 held still, 0.86
+calm again. So the bakes are not kept for it. (a) The game thread: `bench_gate.py` on F3 and on `dev` (`7d73e34`), the
+same worktree, the saves set aside, each set in a fresh editor; the island and planet rows (`island`, `gc`: no Megaplant
+in their flora) and `stplanet`, new, straight east for 40 km from 700 uu over the Meadow (through the heather; the
+planet's `gc=` flies over its datum, 66 km under that ground). The traverse's game-thread mean per run, ms, and the
+scatter's own timed steps (its update and its add flush, where the skinned instances' adds land):
+
+| Route | `dev`: game thread | F3: game thread | `dev`: scatter, flush | F3: scatter, flush |
+|---|---|---|---|---|
+| `island` | 19.2, 22.1, 19.0 | 21.8, 28.3, 36.6; a fresh editor 21.8 | 0.20-0.23, 0.07-0.08 | 0.26-0.41, 0.09-0.15 |
+| `gc` | 23.9, 31.1, 32.5 | 30.1, 36.7, 39.0; a fresh editor 25.4 | 0.47-0.63, 0.27-0.39 | 0.52-0.77, 0.30-0.48 |
+| `stplanet` | 25.0, 39.3, 36.7 | 25.3, 39.7, 29.4 | 0.35-0.47, 0.11-0.18 | 0.33-0.44, 0.10-0.14 |
+
+Through the Megaplants the two builds read the same, run for run (25.0 against 25.3 on the first, the scatter's steps
+a few hundredths apart); the routes with no skeletal definition read slower on F3 in the set that ran after
+`stplanet` in one editor and within `dev`'s own spread in a fresh editor, where the skeletal path does nothing: the
+runs climb within a set on both builds (the later runs of one editor read slower; why is not known), and that
+spread is wider than any difference left. The machine was quieter than for F2's A/Bs (no other session's editor; 17-36
+% load) but not idle, so the rows bound a premium to the run-to-run spread, not below it; what they resolve is that
+there is none of F2's kind: the components do not tick (0 of 36), and what their tick would cost, timed directly
+(`voxel.Scatter.Skinned.TimeRefresh`), is 0.26 ms a frame at 5,146 instances, the cost F2 measured and F3 does not pay.
+No near range, then, and the bakes stay retired. Earlier sets with two other sessions' editors running (76 % load)
+read F3 15 ms slower everywhere, the routes without Megaplants too: discarded.
+
+**Loading.** The definitions' meshes start loading as the PIE world's scatter initializes. The first PIE on a machine
+whose derived data lacks a species builds it: the Japanese knotweed's four stages took 32-75 s each, on the editor's
+asset compiling threads while play went on, and stopping that PIE waited for them (the editor's own wait for compiling
+skinned assets); a cooked game builds nothing. The suites: VoxelWorlds 862/862 (`VoxelWorlds.Scatter.Skeletal`,
+`VoxelWorlds.POI.WeatherBridge.DynamicWind` new); the in-editor gate 29/29 with `DynamicMaterials` and `Skeletal`
+added, the parity lines identical (132). On the way: `SetSkinnedAsset` alone trips the skinned component's
+asset-changed check (an ensure under the suite); `SetSkinnedAssetAndUpdate` is the setter. The engine's
+`DynamicWindSubsystem.h` includes its module's `Internal` log header, which a module outside the engine reaches only
+with that folder on its include path.
+
 ## 11. Later
 
 What the plan named and left, and what the phases found, in one list (2026-11-07):
 
-- **The Megaplants' skinned assemblies** (P3's slice): their baked static meshes have no wind; moving them is a
-  scatter rendering slice of its own.
+- **The Megaplants' collision** (G149): the skinned instances have none, and the junipers lost their bakes' (F3).
 - **A lean against the wind**: the pawn's motion is slowed and helped, nothing shows it; the animation layer can read
   `UVCMovementComponent::GetWeatherWind`.
 - **The campfire's flame**: the fire gutters as its light only; it has no flame particles to thin.
