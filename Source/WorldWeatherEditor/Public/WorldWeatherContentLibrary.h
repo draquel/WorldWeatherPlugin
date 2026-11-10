@@ -45,6 +45,20 @@ public:
 	static FString DescribeSystem(UNiagaraSystem* System);
 
 	/**
+	 * Move a precipitation system's simulation to the GPU (G172): the pack's rain and snow simulate every particle on the
+	 * CPU with the Collision module's scene traces, about 2.8 ms of game thread a frame for the snow. Every owned emitter
+	 * is set to the GPU compute target with fixed local bounds (a GPU emitter cannot compute its bounds on the CPU), its
+	 * collision-event modules are disabled and its event handlers removed (a GPU emitter neither writes nor reads
+	 * events), and a compile is requested. The Collision module picks its GPU path (the depth buffer) by the target.
+	 * @param System The system to change (a duplicate in the plugin's Content, never the pack's own)
+	 * @param BoundsExtent The fixed bounds' half size, uu, about the component (the spawn box and a lifetime's fall)
+	 * @param OutReport What was changed, one line per emitter, with the spawn rate and the lifetime it simulates
+	 * @return true when at least one emitter simulates on the GPU
+	 */
+	UFUNCTION(BlueprintCallable, Category = "WorldWeather|Content")
+	static bool SetPrecipitationGPUSimulation(UNiagaraSystem* System, float BoundsExtent, FString& OutReport);
+
+	/**
 	 * The bolt (the foliage and bolt plan's L1, D69): an empty system gets a copy of the engine's StaticBeam emitter
 	 * template; every owned emitter is set to local space, its ribbon renderers take the bolt material, and the beam's
 	 * end is written into the emitter's baked module constants (a rapid-iteration parameter whose name contains
