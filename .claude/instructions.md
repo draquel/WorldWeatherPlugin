@@ -116,7 +116,9 @@
   renderers given a material, local space on, a compile requested) and `DescribeSystem`; the parent's
   `Scripts/configure_weather.py` duplicates the Spruce pack's `NS_Rain` / `NS_Snow` into `Content/NS_WeatherRain` /
   `NS_WeatherSnow` (tracked; the pack untouched), makes `RT_WeatherOcclusion` and `M_WeatherPrecipitation` (unlit
-  translucent: a streak from the sprite's UV, the particle colour, the fade, the occlusion) and calls the library.
+  translucent: a streak from the sprite's UV, the particle colour, the fade, the occlusion) and calls the library, whose
+  `SetPrecipitationGPUSimulation` puts both systems on the GPU (G172: on the CPU the snow cost about 7 ms of game thread a
+  frame; keep them GPU emitters, fixed bounds, no events).
 - **The providers.** VoxelWorldPOI's `UPOIWeatherBridge` sets itself as both providers once the chunk manager is up: the
   climate from `UVoxelChunkManager::GetClimateAt` (the biome's three fields, mapped from about [-1, 1] to 0..1), the
   altitude, the up, under the sea; shelter 0 inside a stamped dungeon's bounds and inside a claim tagged `Claim.Shelter`.

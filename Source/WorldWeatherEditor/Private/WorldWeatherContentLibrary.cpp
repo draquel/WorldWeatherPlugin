@@ -7,12 +7,16 @@
 #include "NiagaraEditorUtilities.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraEmitterHandle.h"
+#include "NiagaraGraph.h"
 #include "NiagaraMeshRendererProperties.h"
+#include "NiagaraNodeFunctionCall.h"
 #include "NiagaraRendererProperties.h"
 #include "NiagaraRibbonRendererProperties.h"
 #include "NiagaraScript.h"
+#include "NiagaraScriptSource.h"
 #include "NiagaraSpriteRendererProperties.h"
 #include "NiagaraSystem.h"
+#include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 
 namespace
 {
@@ -101,7 +105,8 @@ FString UWorldWeatherContentLibrary::DescribeSystem(UNiagaraSystem* System)
 			Emitter ? (Emitter->IsIn(System) ? TEXT("owned") : *Emitter->GetPathName()) : TEXT("no emitter"));
 		if (Data)
 		{
-			Out += FString::Printf(TEXT(", %s, local space %s"), Data->SimTarget == ENiagaraSimTarget::GPUComputeSim ? TEXT("GPU") : TEXT("CPU"), Data->bLocalSpace ? TEXT("on") : TEXT("off"));
+			Out += FString::Printf(TEXT(", %s, local space %s, bounds %s, %d event handler(s)"), Data->SimTarget == ENiagaraSimTarget::GPUComputeSim ? TEXT("GPU") : TEXT("CPU"),
+				Data->bLocalSpace ? TEXT("on") : TEXT("off"), Data->CalculateBoundsMode == ENiagaraEmitterCalculateBoundMode::Fixed ? TEXT("fixed") : TEXT("dynamic"), Data->GetEventHandlers().Num());
 			for (const UNiagaraRendererProperties* Renderer : Data->GetRenderers())
 			{
 				Out += TEXT("\n    renderer ") + RendererText(Renderer);
@@ -256,4 +261,119 @@ bool UWorldWeatherContentLibrary::BuildLightningSystem(UNiagaraSystem* System, U
 	}
 	System->RequestCompile(/*bForce=*/true);
 	return bRibbon;
+}
+
+namespace
+{
+	/** The constants that size a precipitation emitter's work (the spawn rate, the lifetime, the spawn box), as report text. */
+	FString PrecipitationConstants(FVersionedNiagaraEmitterData& Data)
+	{
+		FString Out;
+		for (UNiagaraScript* Script : EmitterScripts(Data))
+		{
+			TArray<FNiagaraVariable> Parameters;
+			Script->RapidIterationParameters.GetParameters(Parameters);
+			for (const FNiagaraVariable& Parameter : Parameters)
+			{
+				const FString Name = Parameter.GetName().ToString();
+				if (!Name.Contains(TEXT("SpawnRate.SpawnRate")) && !Name.Contains(TEXT("InitializeParticle.Lifetime")) && !Name.Contains(TEXT("BoxLocation.")))
+				{
+					continue;
+				}
+				const uint8* Value = Script->RapidIterationParameters.GetParameterData(Parameter);
+				if (!Value)
+				{
+					continue;
+				}
+				if (Parameter.GetType() == FNiagaraTypeDefinition::GetFloatDef())
+				{
+					Out += FString::Printf(TEXT("  %s = %.2f\n"), *Name, *reinterpret_cast<const float*>(Value));
+				}
+				else if (Parameter.GetType() == FNiagaraTypeDefinition::GetVec3Def())
+				{
+					const FVector3f V = *reinterpret_cast<const FVector3f*>(Value);
+					Out += FString::Printf(TEXT("  %s = (%.0f, %.0f, %.0f)\n"), *Name, V.X, V.Y, V.Z);
+				}
+			}
+		}
+		return Out;
+	}
+}
+
+bool UWorldWeatherContentLibrary::SetPrecipitationGPUSimulation(UNiagaraSystem* System, float BoundsExtent, FString& OutReport)
+{
+	OutReport.Reset();
+	if (!System)
+	{
+		OutReport = TEXT("no system");
+		return false;
+	}
+	int32 OnGPU = 0;
+	for (FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
+	{
+		const FVersionedNiagaraEmitter Instance = Handle.GetInstance();
+		UNiagaraEmitter* Emitter = Instance.Emitter;
+		FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData();
+		UNiagaraScriptSource* Source = Data ? Cast<UNiagaraScriptSource>(Data->GraphSource) : nullptr;
+		if (!Emitter || !Data || !Source || !Source->NodeGraph)
+		{
+			OutReport += FString::Printf(TEXT("%s: no emitter data or graph\n"), *Handle.GetName().ToString());
+			continue;
+		}
+		if (!Emitter->IsIn(System))
+		{
+			OutReport += FString::Printf(TEXT("%s: the emitter %s is not the system's own; left alone\n"), *Handle.GetName().ToString(), *Emitter->GetPathName());
+			continue;
+		}
+		Emitter->Modify();
+		Source->NodeGraph->Modify();
+		const bool bWasGPU = Data->SimTarget == ENiagaraSimTarget::GPUComputeSim;
+		Data->SimTarget = ENiagaraSimTarget::GPUComputeSim;
+		Data->CalculateBoundsMode = ENiagaraEmitterCalculateBoundMode::Fixed;
+		Data->FixedBounds = FBox(FVector(-BoundsExtent), FVector(BoundsExtent));
+
+		// A GPU emitter writes no events: the modules that generate them are disabled (the stack keeps them, greyed).
+		int32 Disabled = 0;
+		TArray<UNiagaraNodeFunctionCall*> Calls;
+		Source->NodeGraph->GetNodesOfClass<UNiagaraNodeFunctionCall>(Calls);
+		for (UNiagaraNodeFunctionCall* Call : Calls)
+		{
+			if (Call->FunctionScript && Call->FunctionScript->GetName().Contains(TEXT("GenerateCollisionEvent")) && Call->IsNodeEnabled())
+			{
+				FNiagaraStackGraphUtilities::SetModuleIsEnabled(*Call, false);
+				++Disabled;
+			}
+		}
+
+		// Nor reads them: the event handlers go, with their graph nodes (as the stack's delete does).
+		TArray<FGuid> HandlerIds;
+		for (const FNiagaraEventScriptProperties& Handler : Data->GetEventHandlers())
+		{
+			if (Handler.Script)
+			{
+				HandlerIds.Add(Handler.Script->GetUsageId());
+			}
+		}
+		for (const FGuid& UsageId : HandlerIds)
+		{
+			TArray<UNiagaraNode*> HandlerNodes;
+			Source->NodeGraph->BuildTraversal(HandlerNodes, ENiagaraScriptUsage::ParticleEventScript, UsageId);
+			Emitter->RemoveEventHandlerByUsageId(UsageId, Instance.Version);
+			for (UNiagaraNode* Node : HandlerNodes)
+			{
+				Node->Modify();
+				Node->DestroyNode();
+			}
+		}
+		++OnGPU;
+		OutReport += FString::Printf(TEXT("%s: %s -> GPU, fixed bounds +-%.0f, %d collision-event module(s) disabled, %d event handler(s) removed\n%s"),
+			*Handle.GetName().ToString(), bWasGPU ? TEXT("GPU") : TEXT("CPU"), BoundsExtent, Disabled, HandlerIds.Num(), *PrecipitationConstants(*Data));
+	}
+	System->Modify();
+	System->RequestCompile(/*bForce=*/true);
+	// Headless the script saves right after: the package must carry the GPU scripts, not the CPU ones.
+	System->WaitForCompilationComplete();
+	System->MarkPackageDirty();
+	UE_LOG(LogWorldWeatherEditor, Log, TEXT("SetPrecipitationGPUSimulation %s:\n%s"), *System->GetName(), *OutReport);
+	return OnGPU > 0;
 }

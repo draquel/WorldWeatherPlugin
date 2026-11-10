@@ -136,10 +136,13 @@ the viewer's traced exposure instead.
 
 The content: the editor's Python reaches no Niagara emitter or renderer, so the plugin's editor module
 (`UWorldWeatherContentLibrary::BuildPrecipitationSystem`) gives a duplicated system's sprite renderers the material and
-sets its emitters to local space; `Scripts/configure_weather.py` duplicates the Spruce pack's `NS_Rain` and `NS_Snow`
-into the plugin's Content as `NS_WeatherRain` and `NS_WeatherSnow` (tracked; the pack untouched), makes the render
-target and `M_WeatherPrecipitation` (unlit translucent: a streak from the sprite's UV, the particle colour, the fade,
-the occlusion), and calls the library.
+sets its emitters to local space, and `SetPrecipitationGPUSimulation` moves them to the GPU (G172: the GPU target, fixed
+local bounds, the collision-event module disabled, the Collision module on its depth-buffer path); `Scripts/configure_weather.py`
+duplicates the Spruce pack's `NS_Rain` and `NS_Snow` into the plugin's Content as `NS_WeatherRain` and `NS_WeatherSnow`
+(tracked; the pack untouched), makes the render target and `M_WeatherPrecipitation` (unlit translucent: a streak from the
+sprite's UV, the particle colour, the fade, the occlusion), and calls the library. Each system is one emitter spawning
+4,000 particles a second (the snow living 2 s, the rain 1-1.75 s): on the GPU they cost the game thread nothing per
+particle.
 
 ## 7. Materials (P3)
 
@@ -300,7 +303,7 @@ ground, hides every particle. On `SmoothTerrain_Planet` the same Storm is rain a
 radial up, clipped at the grass with the capture on, whole with it off) and snow at 78 N (-8.8 C). The GPU frame on
 `VoxelDemo` under the storm (1280 x 722): 5.20 ms with the particles off, 5.36 with the particles and no capture, 5.61 with
 the capture every 4 frames (the default), 6.00 every frame: about 0.4 ms for both at the defaults, under the plan's 0.5.
-The pack's emitters simulate on the CPU (`DescribeSystem`); a GPU emitter is a content change for later. The capture
+The pack's emitters simulate on the CPU (`DescribeSystem`); a GPU emitter is a content change for later (G172 made it, below). The capture
 runs the full renderer at 512 px for a depth: its cost is the renderer's, not the resolution's.
 
 ### P3 (2026-11-07): the material inputs
@@ -476,6 +479,34 @@ added, the parity lines identical (132). On the way: `SetSkinnedAsset` alone tri
 asset-changed check (an ensure under the suite); `SetSkinnedAssetAndUpdate` is the setter. The engine's
 `DynamicWindSubsystem.h` includes its module's `Internal` log header, which a module outside the engine reaches only
 with that folder on its include path.
+
+### G172 (2026-11-10): the precipitation on the GPU
+
+A snow front cost about 6 ms of game thread a frame (found by the map pyramid plan's P4). The cause was the pack's
+emitters: one each, on the CPU, 4,000 particles a second through the Collision module's CPU scene traces and a
+collision-event module (the snow, living 2 s, about 8,000 alive). `NS_WeatherSnow`'s scope ran inside the world tick's
+wait for its tasks and Niagara's tick after the actors; the world tick rose from 8.3 to 15.6 ms with it. Nothing else in
+the front cost the game thread: the sky, collection and mirror writes stayed 0.06-0.13 ms a tick, with or without the
+particles. The fix is content: `UWorldWeatherContentLibrary::SetPrecipitationGPUSimulation` sets both systems' emitters
+to the GPU with fixed local bounds of +-3000 uu (the spawn boxes sit on the component, which follows the camera, so the
+camera is always inside them), disables the collision-event module (a GPU emitter writes no events; neither system had
+a handler), and the Collision module takes its GPU path, the depth buffer. `Scripts/configure_weather.py` calls it after
+`BuildPrecipitationSystem`.
+
+Measured on one build and one editor session on `SmoothTerrain_Planet`, the weather locked (`ww.Set`, `ww.Lock 1`), a
+standing view, the game thread's frame (`FEngineLoop::Tick`) from Insights traces of 15 s and then 5 s per phase
+(`Scripts/qa/weather_cost.py`), the particles on against `ww.Viewer.Precipitation 0`; the GPU frame as ten samples of
+`ww.Weather`'s one-second average:
+
+| Front, place | Game thread, on - off: before | after | The system's scope: before | after | GPU frame, on - off: before | after |
+|---|---|---|---|---|---|---|
+| Snow, 87 N (-22 C) | +6.8 / +7.4 ms | **+0.2 / +0.6** | 3.2-3.5 ms | **0.05** | +0.4 ms | +1.1 |
+| Rain, the equator (32 C) | +4.0 / +3.4 ms | **+0.7 / +0.3** | 2.0 ms | **0.06** | +0.8 ms | +1.0 |
+
+The GPU's share grew by about 0.7 ms under snow and 0.2 under rain (the simulation and its depth-buffer collision; the
+GPU frame included the occlusion capture, which runs only while particles fall). The frame here is bound by the game
+thread at 20 ms against 8.5-9.8 of GPU. The shots before and after look alike (`weather_shots.py`, the flakes and the
+streaks as dense, cut at the ground as before). `WorldWeather.*` passes 13.
 
 ## 11. Later
 
