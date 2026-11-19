@@ -192,7 +192,8 @@ float UWorldWeatherMath::GustFactor(double Seconds, float Gustiness)
 	{
 		return 1.0f;
 	}
-	// Two slow sines of unrelated periods: a lull and a gust every few seconds, never the same twice for a while.
+	// Two slow sines of unrelated periods: a lull and a gust every few seconds, never the same twice for a while. The
+	// periods are real seconds: on the clock's seconds (60 a real second by default) they were 0.12 and 0.05 s (G241).
 	const double Noise = 0.6 * FMath::Sin(Seconds * (UE_DOUBLE_TWO_PI / 7.3)) + 0.4 * FMath::Sin(Seconds * (UE_DOUBLE_TWO_PI / 2.9) + 1.0);
 	return FMath::Max(1.0f + G * static_cast<float>(Noise), 0.0f);
 }

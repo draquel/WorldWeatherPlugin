@@ -83,6 +83,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "WorldWeather")
 	double GetClockSeconds() const;
 
+	/**
+	 * Real seconds of the shared timeline: the game state's server world time, which every machine has (the world's
+	 * time without a game state). The gust's phase (G241): the clock's seconds run at its time scale (60 a real second
+	 * by default), which put the gust's few-second periods inside a frame.
+	 * @return The server world time in real seconds
+	 */
+	UFUNCTION(BlueprintPure, Category = "WorldWeather")
+	double GetGustSeconds() const;
+
 	/** A sync point exists (the authority has drawn a front; a client has received one). */
 	UFUNCTION(BlueprintPure, Category = "WorldWeather")
 	bool HasWeather() const;

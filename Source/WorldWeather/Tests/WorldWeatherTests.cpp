@@ -18,7 +18,10 @@
 #include "Components/SceneCaptureComponent2D.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "GameFramework/GameStateBase.h"
 #include "GameFramework/WorldSettings.h"
+#include "UObject/Script.h"
+#include "UObject/UnrealType.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "NiagaraComponent.h"
@@ -749,6 +752,221 @@ bool FWorldWeatherMirrorInstancesTest::RunTest(const FString& Parameters)
 	}
 	GEngine->DestroyWorldContext(World);
 	World->DestroyWorld(false);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The gust in time (G241): its periods are real seconds, so at 60 fps it moves little a frame, swings from a lull to a
+// gust within any ten seconds, and a client whose estimate of the shared time lags by half a round trip reads nearly the
+// same gust. On the clock's seconds (60 a real second) a frame was 0.12 and 0.05 of its two periods' worth: unrelated.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldWeatherGustMathTest, "WorldWeather.Math.Gust", WORLDWEATHER_TEST_FLAGS)
+bool FWorldWeatherGustMathTest::RunTest(const FString& Parameters)
+{
+	const float G = 0.7f; // the Windy preset's
+	const double Frame = 1.0 / 60.0;
+	double WorstStep = 0.0, WorstStepOnClock = 0.0, WorstLag = 0.0, WorstWindowRange = 10.0;
+	for (int32 i = 0; i < 36000; ++i) // ten minutes of frames
+	{
+		const double T = i * Frame;
+		WorstStep = FMath::Max(WorstStep, (double)FMath::Abs(UWorldWeatherMath::GustFactor(T + Frame, G) - UWorldWeatherMath::GustFactor(T, G)));
+		// The same frame on the clock's seconds at its default 60x, as before the fix.
+		WorstStepOnClock = FMath::Max(WorstStepOnClock, (double)FMath::Abs(UWorldWeatherMath::GustFactor((T + Frame) * 60.0, G) - UWorldWeatherMath::GustFactor(T * 60.0, G)));
+		WorstLag = FMath::Max(WorstLag, (double)FMath::Abs(UWorldWeatherMath::GustFactor(T + 0.05, G) - UWorldWeatherMath::GustFactor(T, G)));
+	}
+	for (int32 w = 0; w < 200; ++w)
+	{
+		const double T0 = w * 2.71;
+		float Lo = 10.0f, Hi = 0.0f;
+		for (int32 i = 0; i <= 600; ++i)
+		{
+			const float V = UWorldWeatherMath::GustFactor(T0 + i * Frame, G);
+			Lo = FMath::Min(Lo, V);
+			Hi = FMath::Max(Hi, V);
+		}
+		WorstWindowRange = FMath::Min(WorstWindowRange, (double)(Hi - Lo));
+	}
+	int32 Gusts = 0;
+	for (int32 i = 1; i < 3600; ++i)
+	{
+		const float Prev = UWorldWeatherMath::GustFactor((i - 1) * Frame, G);
+		const float Here = UWorldWeatherMath::GustFactor(i * Frame, G);
+		const float Next = UWorldWeatherMath::GustFactor((i + 1) * Frame, G);
+		Gusts += (Here > Prev && Here >= Next) ? 1 : 0;
+	}
+	AddInfo(FString::Printf(TEXT("Gustiness %.1f: a 60 fps frame moves the gust %.4f at most (%.3f on the clock's seconds); any 10 s spans %.3f at least; "
+		"a 50 ms lag reads %.4f off at most; %d gusts a minute"), G, WorstStep, WorstStepOnClock, WorstWindowRange, WorstLag, Gusts));
+	TestTrue(TEXT("Smooth: a frame moves the gust little"), WorstStep < 0.025);
+	TestTrue(TEXT("... where the clock's seconds jumped"), WorstStepOnClock > 0.25);
+	TestTrue(TEXT("A lull and a gust within any ten seconds"), WorstWindowRange > G);
+	TestTrue(TEXT("A gust every few seconds"), Gusts >= 8 && Gusts <= 40);
+	TestTrue(TEXT("Two views 50 ms apart agree closely"), WorstLag < 0.06);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The gust on the shared timeline in a game world (G241): stepped at 60 fps with the clock at its default scale, the
+// gust's time advances a real second a second while the clock's advances sixty; the conditions' wind and the mirrored
+// GustFactor follow it smoothly. A second world standing for a client, its own time, clock and frames elsewhere, takes
+// the first's server time as a client does (the game state's replicated time and its OnRep) and reads the same gust.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldWeatherGustTimeTest, "WorldWeather.Subsystem.GustTime", WORLDWEATHER_TEST_FLAGS)
+bool FWorldWeatherGustTimeTest::RunTest(const FString& Parameters)
+{
+	static const FName Group(TEXT("TestGust"));
+	static const FName Param(TEXT("Gust"));
+	const auto ScalarOf = [](const UMaterialInstanceDynamic* Instance, float& OutValue)
+	{
+		for (const FScalarParameterValue& P : Instance->ScalarParameterValues)
+		{
+			if (P.ParameterInfo.Name == Param)
+			{
+				OutValue = P.ParameterValue;
+				return true;
+			}
+		}
+		return false;
+	};
+	const auto MakeWorld = [](const TCHAR* Name, FWorldContext*& OutContext)
+	{
+		UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, Name);
+		OutContext = &GEngine->CreateNewWorldContext(EWorldType::Game);
+		OutContext->SetCurrentWorld(World);
+		AGameStateBase* GameState = World->SpawnActor<AGameStateBase>();
+		World->SetGameState(GameState);
+		return World;
+	};
+	const auto Step = [](UWorld* World, int32 Frames)
+	{
+		const float Dt = 1.0f / 60.0f;
+		for (int32 i = 0; i < Frames; ++i)
+		{
+			World->Tick(LEVELTICK_TimeOnly, Dt);
+			World->GetSubsystem<UWorldClockSubsystem>()->Tick(Dt);
+			World->GetSubsystem<UWorldWeatherSubsystem>()->Tick(Dt);
+		}
+	};
+
+	// The mirror entry goes on the settings for the server world's Initialize, then comes off again.
+	UWorldWeatherSettings* Settings = GetMutableDefault<UWorldWeatherSettings>();
+	const TArray<FWorldWeatherMirrorEntry> SavedTable = Settings->MirrorTable;
+	FWorldWeatherMirrorEntry& Entry = Settings->MirrorTable.AddDefaulted_GetRef();
+	Entry.InstanceGroup = Group;
+	Entry.Parameter = Param;
+	Entry.Source = EWorldWeatherMirrorSource::GustFactor;
+	FWorldContext* ServerContext = nullptr;
+	FWorldContext* ClientContext = nullptr;
+	UWorld* Server = MakeWorld(TEXT("WorldWeatherGustServer"), ServerContext);
+	Settings->MirrorTable = SavedTable;
+	UWorld* Client = MakeWorld(TEXT("WorldWeatherGustClient"), ClientContext);
+
+	UWorldWeatherSubsystem* Weather = Server->GetSubsystem<UWorldWeatherSubsystem>();
+	UWorldWeatherSubsystem* ClientWeather = Client->GetSubsystem<UWorldWeatherSubsystem>();
+	UWorldClockSubsystem* Clock = Server->GetSubsystem<UWorldClockSubsystem>();
+	UWorldClockSubsystem* ClientClock = Client->GetSubsystem<UWorldClockSubsystem>();
+	if (TestNotNull(TEXT("The server world has weather"), Weather) && TestNotNull(TEXT("... the client world too"), ClientWeather)
+		&& TestNotNull(TEXT("... and clocks"), Clock) && TestNotNull(TEXT("... both"), ClientClock)
+		&& TestNotNull(TEXT("A game state"), Server->GetGameState()))
+	{
+		const float Scale = Clock->GetTimeScale();
+		AddInfo(FString::Printf(TEXT("The clock's default scale: %.0f game seconds a real second"), Scale));
+		TestTrue(TEXT("The clock runs faster than real time by default"), Scale >= 10.0f);
+		UMaterialInstanceDynamic* Instance = UMaterialInstanceDynamic::Create(UMaterial::GetDefaultMaterial(MD_Surface), Server);
+		Weather->RegisterMirrorInstance(Group, Instance);
+		// The client's own time (37 frames in) and clock (another hour, real time), before its front is set.
+		Step(Client, 37);
+		ClientClock->SetTimeOfDay(20.0f);
+		ClientClock->SetTimeScale(1.0f);
+		Weather->SetWeather(WorldWeatherTags::Weather_Preset_Windy, 0.0f);
+		ClientWeather->SetWeather(WorldWeatherTags::Weather_Preset_Windy, 0.0f);
+		Weather->SetLocked(true);
+		ClientWeather->SetLocked(true);
+		const FWorldWeatherFront Front = Weather->GetCurrentFront();
+		TestTrue(TEXT("A gusty front"), Front.Gustiness > 0.5f && Front.WindSpeed > 100.0f);
+		const FVector Here(500.0, 700.0, 100.0);
+
+		// Ten seconds of 60 fps frames.
+		Step(Server, 1);
+		const double Gust0 = Weather->GetGustSeconds(), Clock0 = Weather->GetClockSeconds();
+		TestTrue(TEXT("The gust's time is the game state's server world time"), Gust0 == Server->GetGameState()->GetServerWorldTimeSeconds());
+		double WorstMirrorStep = 0.0, WorstWindStep = 0.0, WorstMirrorError = 0.0, WorstWindError = 0.0;
+		float Lo = 10.0f, Hi = 0.0f;
+		float PrevMirror = -1.0f;
+		double PrevWind = -1.0;
+		for (int32 i = 0; i < 600; ++i)
+		{
+			Step(Server, 1);
+			float Mirror = -1.0f;
+			if (!ScalarOf(Instance, Mirror))
+			{
+				AddError(TEXT("The mirror wrote no GustFactor"));
+				break;
+			}
+			const double Wind = Weather->GetConditionsAt(Here).WindVector.Size() / Front.WindSpeed;
+			const float Expected = UWorldWeatherMath::GustFactor(Weather->GetGustSeconds(), Front.Gustiness);
+			WorstMirrorError = FMath::Max(WorstMirrorError, (double)FMath::Abs(Mirror - Expected));
+			WorstWindError = FMath::Max(WorstWindError, FMath::Abs(Wind - Expected));
+			if (PrevMirror >= 0.0f)
+			{
+				WorstMirrorStep = FMath::Max(WorstMirrorStep, (double)FMath::Abs(Mirror - PrevMirror));
+				WorstWindStep = FMath::Max(WorstWindStep, FMath::Abs(Wind - PrevWind));
+			}
+			PrevMirror = Mirror;
+			PrevWind = Wind;
+			Lo = FMath::Min(Lo, Mirror);
+			Hi = FMath::Max(Hi, Mirror);
+		}
+		const double GustElapsed = Weather->GetGustSeconds() - Gust0, ClockElapsed = Weather->GetClockSeconds() - Clock0;
+		AddInfo(FString::Printf(TEXT("600 frames: the gust's time %.3f s, the clock's %.1f s; the mirrored gust %.3f .. %.3f, %.4f a frame at most "
+			"(the conditions' wind %.4f); off GustFactor by %.1e (the wind %.1e)"), GustElapsed, ClockElapsed, Lo, Hi, WorstMirrorStep, WorstWindStep,
+			WorstMirrorError, WorstWindError));
+		TestTrue(TEXT("The gust's time runs in real seconds"), FMath::IsNearlyEqual(GustElapsed, 10.0, 1.0e-3));
+		TestTrue(TEXT("... while the clock's runs at its scale"), FMath::IsNearlyEqual(ClockElapsed, 10.0 * Scale, 0.01 * Scale));
+		TestTrue(TEXT("The mirror writes GustFactor at the gust's time"), WorstMirrorError < 1.0e-5);
+		TestTrue(TEXT("The conditions' wind carries the same gust"), WorstWindError < 1.0e-4);
+		TestTrue(TEXT("Smooth: the mirrored gust moves little a frame"), WorstMirrorStep < 0.025);
+		TestTrue(TEXT("... and so does the wind"), WorstWindStep < 0.025);
+		TestTrue(TEXT("A lull and a gust in ten seconds"), Hi - Lo > Front.Gustiness);
+
+		// The client takes the server's time as the game state replicates it.
+		AGameStateBase* ClientState = Client->GetGameState();
+		FDoubleProperty* TimeProp = FindFProperty<FDoubleProperty>(AGameStateBase::StaticClass(), TEXT("ReplicatedWorldTimeSecondsDouble"));
+		UFunction* OnRep = ClientState ? ClientState->FindFunction(TEXT("OnRep_ReplicatedWorldTimeSecondsDouble")) : nullptr;
+		if (TestNotNull(TEXT("The game state's replicated time"), TimeProp) && TestNotNull(TEXT("... and its OnRep"), OnRep))
+		{
+			TimeProp->SetPropertyValue_InContainer(ClientState, Server->GetGameState()->GetServerWorldTimeSeconds());
+			{
+				// The test world's actors are not initialised for play, where AActor::ProcessEvent runs no function.
+				FEditorScriptExecutionGuard ScriptGuard;
+				ClientState->ProcessEvent(OnRep, nullptr);
+			}
+			TestTrue(TEXT("The client took the server's time"), FMath::IsNearlyEqual(ClientState->GetServerWorldTimeSeconds(),
+				Server->GetGameState()->GetServerWorldTimeSeconds(), 1.0e-6));
+			double WorstAgreement = 0.0;
+			for (int32 i = 0; i < 120; ++i)
+			{
+				const double Shared = Weather->GetGustSeconds();
+				WorstAgreement = FMath::Max(WorstAgreement, FMath::Abs(ClientWeather->GetGustSeconds() - Shared));
+				const double ServerWind = Weather->GetConditionsAt(Here).WindVector.Size();
+				const double ClientWind = ClientWeather->GetConditionsAt(Here).WindVector.Size();
+				if (!FMath::IsNearlyEqual(ServerWind, ClientWind, 1.0e-2))
+				{
+					AddError(FString::Printf(TEXT("Frame %d: the server's wind %.3f, the client's %.3f"), i, ServerWind, ClientWind));
+					break;
+				}
+				Step(Server, 1);
+				Step(Client, 1);
+			}
+			AddInfo(FString::Printf(TEXT("The client's local time %.3f s against the server's %.3f; its clock %.0f s against %.0f; the gust's time %.1e s apart at most"),
+				Client->GetTimeSeconds(), Server->GetTimeSeconds(), ClientWeather->GetClockSeconds(), Weather->GetClockSeconds(), WorstAgreement));
+			TestTrue(TEXT("The two machines' gust time agrees"), WorstAgreement < 1.0e-6);
+			TestFalse(TEXT("... though their clocks do not"), FMath::IsNearlyEqual(ClientWeather->GetClockSeconds(), Weather->GetClockSeconds(), 1.0));
+		}
+	}
+	GEngine->DestroyWorldContext(Client);
+	Client->DestroyWorld(false);
+	GEngine->DestroyWorldContext(Server);
+	Server->DestroyWorld(false);
 	return true;
 }
 
