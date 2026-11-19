@@ -64,9 +64,23 @@ one strike a minute), at a hashed second within it; every machine agrees on the 
 `DefaultMoisture` on a Z-up plane); degrees = the settings' linear map (or `TemperatureCurve`) of the climate's
 temperature, less `NightCoolingC` times (1 - the clock's local daylight), plus the front's offset; the precipitation rate
 = the front's times lerp(`DryPrecipitationScale`, 1, moisture), none under water; the type by the degrees; the wind =
-speed times the gust factor along the azimuth in the local frame; the exposure = the shelter provider's answer, else a
+speed times the gust factor along the azimuth in the local frame (below); the exposure = the shelter provider's answer, else a
 trace cone (`ShelterTraces` rays along the up, the outer ones `ShelterConeDegrees` off it, over `ShelterDistance`, the
 requester's actor ignored, cached `ShelterInterval` per requester); the tags.
+
+The gust (`UWorldWeatherMath::GustFactor`) is two sines of 7.3 and 2.9 seconds, 1 +- the front's gustiness: a lull and
+a gust every few seconds, about 20 a minute. Its time is not the clock's: it is **real seconds of the shared timeline**,
+`GetGustSeconds()`, the game state's server world time (the world's time without a game state), which every machine has
+and which a client's clock already extrapolates from. The conditions' wind and the collection's and the mirror's
+`GustFactor` read it. On the clock's seconds (until G241, 2026-11-19) the periods were 0.12 and 0.05 real seconds at the
+default 60x clock: the wind changed within a frame, the material's `GustFactor` aliased at the frame rate, and two reads
+0.1 s apart were unrelated. The other way, the periods scaled by the clock's time scale, was not taken: a change of scale
+jumps the phase of all the time before it, a paused clock has no scale to divide by, and a client's error in the server
+time would still be multiplied by the scale (60 by default). On the server world time the gust agrees between the server
+and a client at the same moment as closely as their server times do: a client 50 ms off reads within 0.05 of the server's
+gust at the Windy front's gustiness (0.7), and one frame at 60 fps moves it 0.016 at most. The gust keeps its pace at any
+time scale and goes on with the clock paused (`wc.TimeScale 0` stops the fronts and the accumulators, not the gust).
+Tests `WorldWeather.Math.Gust` and `WorldWeather.Subsystem.GustTime`.
 
 The local frame is cyclic with the world's axes (east x north = up, as X x Y = Z): north is +Z projected onto the
 tangent plane, toward a planet's pole, +Y on a plane; east is north x up, the side of increasing longitude on a planet
@@ -213,8 +227,13 @@ its max speed, or full in the air) after the braking and the friction and takes 
 so a standing pawn idles in any wind, a pawn walking into the wind is slowed and one walking with it helped, and a
 fall is carried (flying exempt; the standing drift of the first P4 was dropped on 2026-11-07), and the ground
 friction loses `Wetness x WetGripFactor` of itself.
-Both run inside the movement simulation, so the client's prediction and the server agree (the sync point is the same on
-both). Test `VoxelCharacter.Movement.WindPush`.
+Both run inside the movement simulation. The push is carried in the move (G220, 2026-11-18): each machine's read of the
+wind is its own (its gust read at its own moment, its own exposure trace), so the drift reads the move's air
+(`MoveWindAir`, the wind times the exposure rounded to whole uu/s), which a client keeps in its saved move and sends in
+the move data, and the server simulates the client's move with that air, clamped to the gust's envelope about its own
+mean wind (`ClampClientWindAir`). The client's prediction and the server agree whatever each read; the gust on real
+seconds (G241, section 4) only makes the air the client sends change smoothly. `CHARACTER_SYSTEM.md` ("The weather").
+Tests `VoxelCharacter.Movement.WindPush` and `VoxelCharacter.Movement.WindAir`.
 
 The dedicated-server PIE test (`VoxelEngine.Replication.Framework`) gained a row: the server sets a storm, and the client
 reads the same sync point serial, preset and front within a sync interval. The hand-run QA plan gained an area, F12.
@@ -507,6 +526,29 @@ The GPU's share grew by about 0.7 ms under snow and 0.2 under rain (the simulati
 GPU frame included the occlusion capture, which runs only while particles fall). The frame here is bound by the game
 thread at 20 ms against 8.5-9.8 of GPU. The shots before and after look alike (`weather_shots.py`, the flakes and the
 streaks as dense, cut at the ground as before). `WorldWeather.*` passes 13.
+
+### G241 (2026-11-19): the gust on real seconds
+
+The gust's two sines (7.3 and 2.9 s, "a lull and a gust every few seconds") read the clock's seconds, which run at 60 a
+real second by default: their real periods were 0.12 and 0.05 s. The wind's strength changed within a frame, the
+`GustFactor` the weather writes every tick into `MPC_Weather` and the mirror aliased at the frame rate, and the readers
+that sample the wind every 0.1 s (the pawn until G220 carried its push in the move, the arrow's wind, the ambience) got
+an unrelated value each time. The fix puts the gust on `GetGustSeconds()`, the game state's server world time (section 4
+says why not the periods scaled by the clock's scale). Nothing else in the weather moved: the fronts, the blend, the
+accumulators and the lightning stay on the clock.
+
+Measured in PIE on `VoxelDemo`, the Windy front locked (gustiness 0.7), the mirrored `GustFactor` logged every frame for
+30 s (a slate post-tick callback; 40 fps): it moved 0.010 a frame at the median and 0.031 at most, swung 0.30 to 1.65
+with a range of 1.09 at least in every 10 s and about 15 gusts a minute, and equalled `GustFactor` at the gust's seconds
+exactly, as did the conditions' wind at the pawn; the gust's seconds ran at 1.000 of real time and the clock's at 60.0.
+The old formula on the same frames' clock seconds moved 0.37 a frame at the median and 1.10 at most, its frame-to-frame
+correlation -0.09 (noise) against 0.998 now. With the clock paused (`wc.TimeScale 0`) the gust went on alike (0.30 to
+1.68, 0.033 a frame at most). The foliage moves with it (`wind_shots.py` on the demo: the plants' pixels change between
+two shots a second apart in the wind, not in a calm). Tests `WorldWeather.Math.Gust` (pure: the step a 60 fps frame, the
+range in any ten seconds, the gusts a minute, two views 50 ms apart) and `WorldWeather.Subsystem.GustTime` (two game
+worlds stepped at 60 fps, one taking the other's server time through the game state's replicated time and its OnRep:
+the two gust times 1e-7 s apart, their local times 9.4 s and their clocks 71,000 s apart). `WorldWeather.*` passes 15;
+the headless suite's other 1,055 pass.
 
 ## 11. Later
 

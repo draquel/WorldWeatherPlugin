@@ -34,9 +34,13 @@
   settings' linear map or curve less the night's cooling by the clock's local daylight plus the front's offset
   (`GetTemperatureAt`), the precipitation type by those degrees (snow at or under `SnowBelowC`, sleet within
   `SleetBandC`, rain above; none under water), the rate by the moisture, the wind tangent to the up in the local frame
-  with the gust phase, the accumulators read as snow where it is cold and wet where it is not, the exposure
+  with the gust, the accumulators read as snow where it is cold and wet where it is not, the exposure
   (`GetExposureAt`: the shelter provider's answer, else a trace cone of `ShelterTraces` rays over `ShelterDistance`,
   cached `ShelterInterval` per requester), and the tags.
+- **The gust runs on real seconds, not the clock's** (G241): `GustFactor`'s two sines (7.3 and 2.9 s) take
+  `GetGustSeconds()`, the game state's server world time, which every machine has (the clock's own client base,
+  unscaled). Never feed it `GetClockSeconds()`: at the default 60x clock its periods fall inside a frame. A paused clock
+  stops the fronts, not the gust.
 - **The local frame** (`UWorldWeatherMath::LocalFrame`) is cyclic with the world's axes: north is +Z projected onto the
   tangent plane (toward a planet's pole; +Y on a plane), east is north x up (the side of increasing longitude on a
   planet, where the clock's sun rises; +X on a plane). A front's `WindAzimuth` is degrees from that north toward that
@@ -172,12 +176,14 @@ their penalties VoxelCharacterPlugin's; `WEATHER_SYSTEM.md` section 9 lists them
 - A change to the schedule, the blend, the accumulators or the resolution changes what every machine computes: keep the
   functions pure in `UWorldWeatherMath` and the tests on them.
 - Tests: `WorldWeather.*` (EditorContext | EngineFilter): `Math.Blend`, `Math.Schedule`, `Math.PrecipitationType`,
-  `Math.WindVector`, `Math.Accumulators`, `Math.Lightning`, `Math.Occlusion`, `Sync.Resolve` (pure); `Subsystem.Defaults`
+  `Math.WindVector`, `Math.Accumulators`, `Math.Lightning`, `Math.Occlusion`, `Sync.Resolve`, `Math.Gust` (pure); `Subsystem.Defaults`
   (a game world without a provider: the defaults, SetWeather, the blend, the schedule, the lock, the export round trip,
   the wind), `Viewer.Precipitation` (the component's capture setup, inactive without a system, inactive when nothing
   falls), `Viewer.Player` (the ambience's shelter filter, the weightless lens without a material, a strike reaching the
   lightning component and queuing thunder), `Subsystem.MirrorInstances` (the instance targets: registration, the tick
-  write, unregistration, an instance gone), `Lightning.Bolt`. The capture's rendering, the material's occlusion, the sounds and the lens
+  write, unregistration, an instance gone), `Subsystem.GustTime` (the gust on the server world time at 60 fps with the
+  clock at its scale, the mirror and the conditions following it, a second world taking the first's replicated time
+  reading the same gust), `Lightning.Bolt`. The capture's rendering, the material's occlusion, the sounds and the lens
   are seen in PIE (`Scripts/qa/weather_shots.py`), not tested headless.
 
 ## Console

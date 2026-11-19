@@ -145,11 +145,17 @@ public:
 	static void OcclusionCoords(const FVector& Point, const FVector& Origin, const FVector& Forward, const FVector& U, const FVector& V,
 		FVector2D& OutUV, float& OutDepth);
 
-	/** The gust multiplier at a clock time: two slow sines; 1 for no gustiness, within 1 +- Gustiness. */
+	/**
+	 * The gust multiplier at a time: two slow sines of 7.3 and 2.9 s, a lull and a gust every few seconds.
+	 * @param Seconds Real seconds of the shared timeline (UWorldWeatherSubsystem::GetGustSeconds, the server world time),
+	 *        never the clock's scaled seconds (G241)
+	 * @param Gustiness The front's, 0..1
+	 * @return 1 for no gustiness, else within 1 +- Gustiness and never negative
+	 */
 	UFUNCTION(BlueprintPure, Category = "WorldWeather|Math")
 	static float GustFactor(double Seconds, float Gustiness);
 
-	/** The wind at a place, world uu/s, tangent to Up, the gust folded in. */
+	/** The wind at a place, world uu/s, tangent to Up, the gust at Seconds (GustFactor's real seconds) folded in. */
 	UFUNCTION(BlueprintPure, Category = "WorldWeather|Math")
 	static FVector WindVector(float Speed, float AzimuthDegrees, const FVector& Up, float Gustiness, double Seconds);
 
@@ -186,7 +192,7 @@ public:
 	 * @param Wetness The global accumulator
 	 * @param SnowCover The global accumulator
 	 * @param Exposure 1 under the sky, 0 sheltered
-	 * @param Seconds Clock seconds (the gust phase)
+	 * @param Seconds Real seconds of the shared timeline (the gust phase, GustFactor), not the clock's
 	 * @param Rules The thresholds
 	 */
 	static FWorldWeatherConditions Resolve(const FWorldWeatherFront& Front, const FGameplayTag& PresetTag, const FWorldWeatherClimateSample& Climate,

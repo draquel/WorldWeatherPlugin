@@ -16,6 +16,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/KismetMaterialLibrary.h"
@@ -171,6 +172,19 @@ double UWorldWeatherSubsystem::GetClockSeconds() const
 	}
 	const UWorld* World = GetWorld();
 	return World ? World->GetTimeSeconds() : 0.0;
+}
+
+double UWorldWeatherSubsystem::GetGustSeconds() const
+{
+	// The clock's own base on a client (it extrapolates from the server world time), unscaled: the gust agrees between
+	// machines as the clock does, keeps its periods in real seconds at any time scale, and gusts on with the clock paused.
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return 0.0;
+	}
+	const AGameStateBase* GameState = World->GetGameState();
+	return GameState ? GameState->GetServerWorldTimeSeconds() : World->GetTimeSeconds();
 }
 
 const FWorldWeatherSyncPoint* UWorldWeatherSubsystem::FindSync() const
@@ -385,7 +399,7 @@ FWorldWeatherConditions UWorldWeatherSubsystem::GetConditionsAt(const FVector& W
 		UWorldWeatherMath::IntegrateAccumulators(*S, Now, Settings->MakeRates(), Wetness, SnowCover);
 	}
 	const FWorldWeatherClimateSample Climate = GetClimateAt(WorldPos);
-	return UWorldWeatherMath::Resolve(Front, Preset, Climate, GetTemperatureAt(WorldPos), Wetness, SnowCover, GetExposureAt(WorldPos, Requester), Now, Settings->MakeRules());
+	return UWorldWeatherMath::Resolve(Front, Preset, Climate, GetTemperatureAt(WorldPos), Wetness, SnowCover, GetExposureAt(WorldPos, Requester), GetGustSeconds(), Settings->MakeRules());
 }
 
 // --- Writing ---
@@ -796,8 +810,8 @@ void UWorldWeatherSubsystem::TickSky(float DeltaTime, double Now)
 	{
 		const FVector View = GetLocalViewPoint();
 		const FWorldWeatherClimateSample Climate = GetClimateAt(View);
-		const float Gust = UWorldWeatherMath::GustFactor(Now, Front.Gustiness);
-		const FVector Wind = UWorldWeatherMath::WindVector(Front.WindSpeed, Front.WindAzimuth, Climate.Up, 0.0f, Now);
+		const float Gust = UWorldWeatherMath::GustFactor(GetGustSeconds(), Front.Gustiness);
+		const FVector Wind = UWorldWeatherMath::WindVector(Front.WindSpeed, Front.WindAzimuth, Climate.Up, 0.0f, 0.0);
 		const FVector WindDir = Wind.GetSafeNormal();
 		float Wetness = 0.0f, SnowCover = 0.0f;
 		if (const FWorldWeatherSyncPoint* Sp = FindSync())
